@@ -67,6 +67,18 @@ Azure DevOps bots. It has no compose file of its own — add this service to the
     restart: unless-stopped
     env_file:
       - .env.new-comm-builder
+    environment:
+      # Pinned here, not just in the image: env_file takes precedence over the
+      # Dockerfile's ENV, so a stray path in .env.new-comm-builder would
+      # otherwise silently relocate the cache, worktrees or state.
+      REPO_CACHE_DIR: /data/repos
+      WORKTREE_ROOT: /data/worktrees
+      STATE_DIR: /data/state
+      LOG_DIR: /data/logs
+      SKILLS_SOURCE_DIR: /app/.claude
+      CONTINIA_CLI_PATH: /usr/local/bin/continia
+      CONTINIA_ALC_CACHE: /data/alc-cache
+      CONTINIA_AUTO_INSTALL_ALC: "1"
     volumes:
       - new-comm-builder-data:/data
       # Seeds the first bare clone so a multi-gigabyte fetch becomes a local
@@ -172,3 +184,7 @@ bun run typecheck
 bun test                  # unit tests; no network
 bun run test:integration  # live ADO calls, skipped unless credentials are present
 ```
+
+For deploying to the VM and verifying it end to end, see
+[docs/vm-bringup.md](docs/vm-bringup.md) — a step-by-step setup guide plus a manual test ladder
+that isolates one boundary per rung.
