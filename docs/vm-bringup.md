@@ -1,82 +1,164 @@
 # VM bring-up and manual test guide
 
-Getting `new-comm-builder` running in the shared `~/teams/continia-banking` stack, then
-verifying it end to end.
+Step-by-step deployment of `new-comm-builder` into the shared `~/teams/continia-banking` stack,
+then end-to-end verification.
 
-**The test steps are a ladder: cheapest and most reversible first, each rung isolating one
-boundary.** Don't climb past a red rung — a failure at rung 4 is much harder to diagnose if
-rung 2 was never confirmed.
+**One action per step. Do them in order and don't skip a red one** — a failure at step 40 is
+painful to diagnose if step 22 was never confirmed.
+
+Every step is tagged with where it runs:
+
+- **[WIN]** — your Windows workstation, in `C:\GeneralDev\DevOpsPullers\ADONewDirectCombuilder`
+- **[VM]** — the Linux VM, in `~/teams/continia-banking` unless stated otherwise
 
 Unit tests already cover the phase machine, tag-handshake logic, state transitions and the
-"no PR when verification failed" invariant with fakes. Everything below targets the four
-things fakes can't reach: **ADO REST**, **git worktrees + skill wiring**, **Agent SDK skill
+"no PR when verification failed" invariant using fakes. Everything here targets the four
+boundaries fakes can't reach: **ADO REST**, **git worktrees + skill wiring**, **Agent SDK skill
 discovery**, and **the BC/Continia CLI chain**.
+
+Shorthand used throughout:
+
+```bash
+# [VM] paste once per shell session
+S="docker compose run --rm new-comm-builder bun run src/cli/index.ts"
+```
 
 ---
 
-# PART 1 — One-time setup
+# PHASE A — Get the files onto the VM (steps 1–12)
 
-All paths assume the stack lives at `~/teams/continia-banking`.
-
-## Step 1: Clone into the stack
+### 1. [VM] Confirm the stack directory exists
 
 ```bash
-cd ~/teams/continia-banking
+cd ~/teams/continia-banking && ls -d */ | head -20
+```
+- [ ] The six existing bot directories are listed
+
+### 2. [VM] Confirm no old copy of this bot is present
+
+```bash
+ls -d ADONewDirectCombuilder 2>/dev/null && echo "ALREADY EXISTS" || echo "clean"
+```
+- [ ] Prints `clean`. If it exists, back it up or `git pull` in it instead of step 3
+
+### 3. [VM] Clone the repo
+
+```bash
 git clone https://github.com/rf9000/ADONewDirectCombuilder.git
 ```
+- [ ] Clone succeeded
 
-## Step 2: Copy the three gitignored files from your workstation
+### 4. [VM] Confirm you're on main at the right commit
 
-None of these arrive with the clone. Run from `C:\GeneralDev\DevOpsPullers\ADONewDirectCombuilder`
-on the Windows box:
+```bash
+git -C ADONewDirectCombuilder log --oneline -1
+```
+- [ ] Shows the VM bring-up commit or later
+
+### 5. [VM] Create the `.tools` directory
+
+It's gitignored, so the clone has no such directory.
+
+```bash
+mkdir -p ~/teams/continia-banking/ADONewDirectCombuilder/.tools
+```
+- [ ] Directory created
+
+### 6. [WIN] Copy the Continia Linux CLI over
+
+90 MB. **Required** — the build fails outright without it (`Dockerfile:22`).
 
 ```powershell
-$vm = "azureuser@<vm-host>"
+$vm  = "azureuser@<vm-host>"
 $dst = "~/teams/continia-banking/ADONewDirectCombuilder"
-
-ssh $vm "mkdir -p $dst/.tools"
-scp .tools/continia-linux "${vm}:${dst}/.tools/"     # 90 MB — REQUIRED, build fails without it
-scp .mcp.json             "${vm}:${dst}/"            # optional, see Step 5
+scp .tools/continia-linux "${vm}:${dst}/.tools/"
 ```
+- [ ] Transfer completed
 
 Do **not** copy `continia.exe` (112 MB, Windows-only) and do **not** copy your local `.env` —
-Step 4 writes a fresh one with container paths.
+step 14 writes a fresh one.
+
+### 7. [VM] Make the CLI executable
 
 ```bash
-ssh $vm "chmod +x $dst/.tools/continia-linux"
+chmod +x ~/teams/continia-banking/ADONewDirectCombuilder/.tools/continia-linux
 ```
+- [ ] No error
 
-- [ ] `.tools/continia-linux` present and executable
+### 8. [VM] Verify the binary actually runs on this host
 
-## Step 3: Confirm the host repo paths for clone seeding
-
-The seed turns a multi-gigabyte ADO fetch into a local object copy. Verify the real directory
-names — the setup-files one is a guess:
+The single highest-value early check: it's a dynamically linked Node SEA build and has never
+run on Linux in this project.
 
 ```bash
-ls -d ~/repos/continia-banking ~/repos/continia-banking-setup-files
+~/teams/continia-banking/ADONewDirectCombuilder/.tools/continia-linux --version
 ```
+- [ ] Prints a version, **not** a linker error
 
-If the second path differs, use the real one in Steps 4 and 6. If it doesn't exist at all,
-leave `SETUP_FILES_SEED_REPO` unset — that repo is small, so a plain clone is fine.
+If this fails with a missing `.so`, the container may still work — it installs `libicu72`,
+`libssl3` and `libstdc++6`. Note the failure and re-check at step 30.
 
-- [ ] Banking repo path confirmed
-- [ ] Setup-files repo path confirmed (or deliberately skipped)
+### 9. [WIN] Copy `.mcp.json` (optional)
 
-## Step 4: Write the env file
+Gitignored because it holds a PAT. Without it the bot runs fine — branch, PR, comment and tag
+operations all go through `src/sdk/`. You lose the planner's AL object-ID reservation and
+`fw-create-pr`, and the loss is **silent** (`loadMcpServers` returns `{}` quietly).
 
-At the **stack root**, not inside the service directory:
+```powershell
+scp .mcp.json "${vm}:${dst}/"
+```
+- [ ] Copied, or consciously skipped
+
+### 10. [VM] Confirm the banking repo is on the host
+
+This is the clone seed — it turns a multi-GB ADO fetch into a local object copy.
+
+```bash
+ls -d ~/repos/continia-banking && git -C ~/repos/continia-banking rev-parse --is-inside-work-tree
+```
+- [ ] Path exists and prints `true`
+
+### 11. [VM] Find the setup-files repo's real directory name
+
+```bash
+ls -d ~/repos/*setup* ~/repos/*Setup* 2>/dev/null
+```
+- [ ] Note the exact path — used in steps 14 and 20
+
+If nothing matches, leave `SETUP_FILES_SEED_REPO` unset. That repo is small, so a plain clone
+is fine.
+
+### 12. [VM] Record both seed paths
+
+Write them down; steps 14 and 20 both need them.
+- [ ] Banking seed path noted
+- [ ] Setup-files seed path noted (or "none")
+
+---
+
+# PHASE B — Configuration (steps 13–20)
+
+### 13. [VM] Confirm the env file doesn't already exist
+
+```bash
+ls -l ~/teams/continia-banking/.env.new-comm-builder 2>/dev/null && echo EXISTS || echo clean
+```
+- [ ] Prints `clean`
+
+### 14. [VM] Write the env file
+
+At the **stack root**, not inside the service directory. Fill in the four secrets.
 
 ```bash
 cd ~/teams/continia-banking
 cat > .env.new-comm-builder <<'EOF'
 # --- Azure DevOps ---
-AZURE_DEVOPS_PAT=<pat with Work Items R/W + Code R/W/Manage>
+AZURE_DEVOPS_PAT=<pat: Work Items R/W + Code R/W/Manage>
 AZURE_DEVOPS_ORG=continia-software
 AZURE_DEVOPS_PROJECT=Continia Software
 
-# --- This bot's OWN key, not shared with the other services ---
-ANTHROPIC_API_KEY=sk-ant-...
+# --- This bot's OWN key, deliberately not shared with the other services ---
+ANTHROPIC_API_KEY=<sk-ant-...>
 
 # --- Continia CLI (DemoPortal) ---
 CONTINIA_API_TOKEN=<demoportal token>
@@ -87,315 +169,561 @@ BANKING_REPO_ID=a838fce3-3b9c-4c78-beec-cb4cf5983144
 SETUP_FILES_REPO_NAME=Continia Banking Setup Files
 SETUP_FILES_REPO_ID=0507b34a-7d81-4cfa-affb-f8081de4765e
 
-# --- Seed the first clone from the read-only mounts (Step 3) ---
+# --- Clone seeds: the read-only mounts from step 20 ---
 BANKING_SEED_REPO=/repos/continia-banking
 SETUP_FILES_SEED_REPO=/repos/continia-banking-setup-files
 
-# --- Optional: only if you copied .mcp.json ---
+# --- Only if you copied .mcp.json (step 9) ---
 # ADO_MCP_PAT_B64=<base64 of "you@continia.com:<pat>">
 EOF
-chmod 600 .env.new-comm-builder
 ```
+- [ ] File written
 
-**Put no path variables in here.** `REPO_CACHE_DIR`, `WORKTREE_ROOT`, `STATE_DIR`, `LOG_DIR`
-and `SKILLS_SOURCE_DIR` are pinned in the compose `environment:` block, because `env_file`
-takes precedence over the image's `ENV` and a stray path would silently relocate the cache.
+### 15. [VM] Fix the seed paths if step 11 found different names
 
-- [ ] `.env.new-comm-builder` written, mode 600
+```bash
+grep SEED_REPO .env.new-comm-builder
+```
+- [ ] Both values match the container-side mount paths you'll set in step 20
 
-## Step 5: MCP (optional)
+### 16. [VM] Lock the file down
 
-`.mcp.json` is gitignored and holds a PAT. Without it the bot still runs — branch, PR, comment
-and tag operations all go through the REST client in `src/sdk/`. What you lose is the planner's
-AL object-ID reservation and the `fw-create-pr` command, and the loss is **silent**:
-`loadMcpServers` returns `{}` without complaint.
+```bash
+chmod 600 .env.new-comm-builder && ls -l .env.new-comm-builder
+```
+- [ ] Mode is `-rw-------`
 
-If you copied it, generate the credential (it's used verbatim as the Basic auth value, so it
-must be pre-encoded — not the raw PAT):
+### 17. [VM] Confirm no path variables leaked in
+
+`env_file` takes precedence over the image's `ENV`, so a stray path here would silently
+relocate the repo cache, worktrees or state.
+
+```bash
+grep -E '^(REPO_CACHE_DIR|WORKTREE_ROOT|STATE_DIR|LOG_DIR|SKILLS_SOURCE_DIR)=' \
+  .env.new-comm-builder && echo "REMOVE THESE" || echo "clean"
+```
+- [ ] Prints `clean`
+
+### 18. [VM] Generate the MCP credential (only if you did step 9)
+
+It's used verbatim as the Basic auth value, so it must be pre-encoded — not the raw PAT.
 
 ```bash
 printf '%s:%s' "rf@continia.com" "<pat>" | base64 -w0
 ```
+- [ ] Output pasted into `ADO_MCP_PAT_B64` in the env file
 
-Put the result in `ADO_MCP_PAT_B64` in `.env.new-comm-builder`.
-
-- [ ] MCP configured, or consciously skipped
-
-## Step 6: Add the service to the shared compose
-
-Append to `~/teams/continia-banking/docker-compose.yml` — the full block is in this repo's
-[README](../README.md#running-on-the-linux-vm). Adjust the two bind-mount paths to match
-Step 3. Also add `new-comm-builder-data:` to the top-level `volumes:` block.
-
-Then validate the merged file parses before building:
+### 19. [VM] Open the shared compose file
 
 ```bash
-cd ~/teams/continia-banking
-docker compose config --services | grep new-comm-builder
+cp docker-compose.yml docker-compose.yml.bak
+$EDITOR docker-compose.yml
 ```
+- [ ] Backup taken before editing
 
-- [ ] `new-comm-builder` appears in the service list
-- [ ] `new-comm-builder-data` declared under `volumes:`
+### 20. [VM] Add the service block and volume
 
-## Step 7: Check headroom
+Copy the `new-comm-builder:` block from
+[README](../README.md#running-on-the-linux-vm) into `services:`, and add
+`new-comm-builder-data:` to the top-level `volumes:`. Adjust the two bind-mount paths to the
+real ones from steps 10–11.
 
-An 8G limit alongside six long-running watchers:
+- [ ] Service block added under `services:`
+- [ ] `new-comm-builder-data:` added under `volumes:`
+- [ ] Bind-mount host paths match steps 10–11
+- [ ] Both mounts end in `:ro`
+
+---
+
+# PHASE C — Build (steps 21–26)
+
+### 21. [VM] Validate the merged compose parses
 
 ```bash
-free -h
-docker stats --no-stream
+docker compose config --services
+```
+- [ ] All seven services listed, including `new-comm-builder`
+- [ ] No YAML error
+
+### 22. [VM] Confirm the resolved config picked up your env file
+
+```bash
+docker compose config new-comm-builder | grep -E 'REPO_CACHE|STATE_DIR|SKILLS_SOURCE|SEED_REPO|/repos'
+```
+- [ ] Paths are `/data/...` and `/app/.claude`
+- [ ] Seed paths and `:ro` mounts appear as expected
+
+### 23. [VM] Check RAM headroom
+
+The 8G limit sits alongside six long-running watchers.
+
+```bash
+free -h && docker stats --no-stream --format '{{.Name}} {{.MemUsage}}'
+```
+- [ ] Enough free memory for an 8G peak
+
+### 24. [VM] Check disk headroom
+
+Budget ~10 GB for repo mirrors + worktrees + AL compiler cache.
+
+```bash
 df -h /var/lib/docker
 ```
+- [ ] At least 10 GB free
 
-The first clone plus an AL compile is the peak. Budget ~10 GB of disk for the volume.
-
-- [ ] Enough free RAM for an 8G peak
-- [ ] Enough disk for repo mirrors + worktrees + ALC cache
-
-## Step 8: Build
+### 25. [VM] Build the image
 
 ```bash
 docker compose build new-comm-builder
 ```
+- [ ] Build succeeded
 
-Fails immediately and loudly if `.tools/continia-linux` is missing (`Dockerfile:22`).
+If it fails at the `COPY .tools/continia-linux` line, redo steps 5–7.
 
-- [ ] Image built
+### 26. [VM] Confirm the image exists
+
+```bash
+docker images | grep -i comm-builder
+```
+- [ ] Image listed
 
 ---
 
-# PART 2 — Pre-flight (rung 1)
+# PHASE D — Pre-flight, no writes anywhere (steps 27–33)
 
-No writes anywhere. All from `~/teams/continia-banking`.
-
-### 1a — Config loads
+### 27. [VM] Set the shorthand
 
 ```bash
-docker compose run --rm new-comm-builder bun run src/cli/index.ts status
+S="docker compose run --rm new-comm-builder bun run src/cli/index.ts"
 ```
+- [ ] Set
 
+### 28. [VM] Config loads and credentials validate
+
+```bash
+$S status
+```
 - [ ] Org/project print as `continia-software/Continia Software`
 - [ ] Both repo GUIDs shown — **not** `ID NOT SET`
 - [ ] `Build/test: enabled`
 - [ ] `0 tracked job(s): {}`
 
-A missing `ANTHROPIC_API_KEY` or `CONTINIA_API_TOKEN` fails here with the variable named,
-rather than surviving to burn a planning run.
+A missing `ANTHROPIC_API_KEY` or `CONTINIA_API_TOKEN` fails here naming the variable, rather
+than surviving to burn a planning run.
 
-### 1b — Continia CLI runs
+### 29. [VM] Confirm container paths and mounts
+
+```bash
+docker compose run --rm new-comm-builder sh -c \
+  'echo "$REPO_CACHE_DIR | $STATE_DIR | $SKILLS_SOURCE_DIR"; ls /repos'
+```
+- [ ] Paths are `/data/repos | /data/state | /app/.claude`
+- [ ] `/repos` lists both host repos
+
+### 30. [VM] Continia CLI runs inside the container
 
 ```bash
 docker compose run --rm new-comm-builder continia env list --json
 ```
-
-This is the one thing never exercised on Windows: the Linux CLI is a dynamically linked Node
-SEA build. If `libicu72`/`libssl3` don't satisfy it, it fails **here** rather than 40 minutes
-into a verify phase.
-
 - [ ] Returns JSON, not a linker error
 - [ ] DemoPortal token accepted
 
-### 1c — Tests pass inside the image
+This is the check that saves the most time — if it fails, it fails in seconds instead of 40
+minutes into a verify phase.
+
+### 31. [VM] Skills are present in the image
+
+```bash
+docker compose run --rm new-comm-builder \
+  sh -c 'ls /app/.claude/skills | wc -l; ls /app/.claude/skills | head -5'
+```
+- [ ] Count is `15`
+- [ ] `bank-integration-planner` among them
+
+### 32. [VM] Test suite passes in the image
 
 ```bash
 docker compose run --rm new-comm-builder bun test
 ```
-
 - [ ] 189 pass, 0 fail
 
-### 1d — Paths landed inside the container
+### 33. [VM] Git can authenticate to ADO from inside the container
+
+Cheapest possible check of the PAT's Code scope, before a real clone.
 
 ```bash
-docker compose run --rm new-comm-builder sh -c 'echo $REPO_CACHE_DIR $STATE_DIR $SKILLS_SOURCE_DIR; ls /repos'
+docker compose run --rm new-comm-builder sh -c \
+  'bun run src/cli/index.ts status >/dev/null && echo "config ok"'
 ```
+- [ ] Prints `config ok`
 
-- [ ] Paths are `/data/...` and `/app/.claude`, not Windows paths
-- [ ] `/repos` lists the read-only mounts
+Real git auth is exercised at step 41.
 
 ---
 
-# PART 3 — Manual test ladder
+# PHASE E — Throwaway work item (steps 34–37)
 
-## Prepare a throwaway work item
+### 34. [ADO] Create a scrap work item
 
-**Use a scrap work item, never a real one.** The pipeline comments on it, re-tags it, and can
-open pull requests against whatever it's pointed at.
+**Never point this at a real work item.** The pipeline comments on it, re-tags it, and can open
+pull requests against whatever it's given.
 
-1. Create a User Story in `Continia Software`, title e.g. `TEST — Acme Bank communication`.
-2. Give it a deliberately **underspecified** description: name a bank and an auth method, but
-   omit the reference bank, the payment methods and the statement format.
-3. Add the tag `create-new-comm`.
-4. Note the ID — `<WI>` below.
+In `Continia Software`, create a User Story titled e.g. `TEST — Acme Bank communication`.
+- [ ] Created
 
-The vagueness is the point: it makes the planner stop and ask, which is the cheap way to
-exercise the whole ADO write path for one planning run instead of a full job.
+### 35. [ADO] Give it a deliberately underspecified description
+
+Name a bank and an auth method. **Omit** the reference bank, the payment methods and the
+statement format.
+
+- [ ] Description is vague on purpose
+
+The vagueness is the point: it makes the planner stop and ask, which exercises the entire ADO
+write path for one planning run instead of a whole job.
+
+### 36. [ADO] Add the trigger tag
+
+Add tag `create-new-comm`.
+- [ ] Tag added
+
+### 37. Note the work item ID
+
+Referred to as `<WI>` below.
+- [ ] ID recorded
 
 ---
 
-### Rung 2 — ADO read path, zero writes
+# PHASE F — Rung 2: ADO read path, zero writes (steps 38–40)
+
+### 38. [VM] Dry-run the item
+
+Returns before any worktree or agent work, so this isolates one thing.
 
 ```bash
-docker compose run --rm new-comm-builder \
-  bun run src/cli/index.ts run-item <WI> --dry-run
+$S run-item <WI> --dry-run
 ```
-
-Returns before any worktree or agent work, so this tests exactly one thing.
-
 - [ ] Title and description print
-- [ ] Comment count matches what's on the item in ADO
-- [ ] No comment added, no tag changed (**check the item in ADO**)
-- [ ] `status` still shows the job as unprocessed
+- [ ] Comment count matches ADO
 
-### Rung 3 — Clarify handshake, worktrees, skill discovery
+### 39. [ADO] Confirm nothing was written
 
-Drop `--dry-run`. One planning run; expect 10–20 minutes and a few dollars.
+- [ ] No new comment on the item
+- [ ] Tags unchanged — `create-new-comm` still there
+
+### 40. [VM] Confirm no job state was persisted
+
+```bash
+$S status
+```
+- [ ] Still `0 tracked job(s)`
+
+---
+
+# PHASE G — Rung 3: clarify handshake and skill wiring (steps 41–52)
+
+One planning run. Expect 10–20 minutes and a few dollars.
+
+### 41. [VM] Run the item for real
+
+```bash
+$S run-item <WI>
+```
+- [ ] Completes without a fatal error
+- [ ] Log shows the clone finishing in seconds/low minutes, **not** a multi-GB download
+
+That second box is the seed working. If it downloaded everything, recheck steps 15 and 22.
+
+### 42. [VM] Confirm the bare clones exist
 
 ```bash
 docker compose run --rm new-comm-builder \
-  bun run src/cli/index.ts run-item <WI>
+  sh -c 'ls /data/repos && git -C /data/repos/banking.git count-objects -vH | tail -3'
 ```
+- [ ] `banking.git` and `setupFiles.git` present
+- [ ] Object count is non-trivial
 
-**On the work item in ADO:**
-- [ ] A comment appears listing blocking questions, rendered as HTML (not raw tags)
-- [ ] Tag `create-new-comm` is gone, `create-new-comm-waiting` present
+### 43. [VM] Confirm the seed left no dangling dependency
 
-**In state:**
+`--dissociate` should have copied the objects and dropped the alternate.
+
 ```bash
-docker compose run --rm new-comm-builder bun run src/cli/index.ts status
+docker compose run --rm new-comm-builder \
+  sh -c 'cat /data/repos/banking.git/objects/info/alternates 2>/dev/null || echo "no alternates — correct"'
 ```
-- [ ] Phase `awaiting-answers`, `rounds=1`
-- [ ] Branch recorded as `Userstory/agent/<WI>-<slug>`
+- [ ] Prints `no alternates — correct`
 
-**In the worktree** — the load-bearing wiring:
+### 44. [ADO] Questions were posted
+
+- [ ] A comment lists blocking questions
+- [ ] It renders as formatted HTML, not raw tags
+
+### 45. [ADO] Tags were swapped
+
+- [ ] `create-new-comm` is **gone**
+- [ ] `create-new-comm-waiting` is present
+
+### 46. [VM] State reflects the pause
+
 ```bash
-docker compose run --rm new-comm-builder sh -c '
-  cd /data/worktrees/<WI>/banking &&
-  ls -l .claude/skills/ | head &&
-  cat .claude/repo-paths.json &&
-  echo "--- git status (must be clean) ---" &&
-  git status --porcelain'
+$S status
 ```
-- [ ] `.claude/skills/*` are **symlinks** (`l` in the mode, arrow to `/app/.claude/...`)
-- [ ] `repo-paths.json` names both worktree paths
-- [ ] `git status --porcelain` is **empty** — no `.agent/`, no `.claude/`
+- [ ] Phase `awaiting-answers`
+- [ ] `rounds=1`
+- [ ] Branch shown as `Userstory/agent/<WI>-<slug>`
 
-That last box is the one that matters: it proves `.git/info/exclude` is doing its job and none
-of our scaffolding can reach a pull request diff.
+### 47. [VM] Skills are symlinked into the worktree
 
-**Seed worked:**
-- [ ] Clone finished in seconds/low minutes, not a multi-GB download (`docker compose logs`)
-- [ ] `git -C /data/repos/banking.git count-objects -vH` shows real objects
+```bash
+docker compose run --rm new-comm-builder \
+  sh -c 'ls -l /data/worktrees/<WI>/banking/.claude/skills/ | head -5'
+```
+- [ ] Entries are **symlinks** (`l` in the mode, arrows into `/app/.claude/...`)
 
-**Then resume the loop:**
+### 48. [VM] Sibling repo paths were written
+
+```bash
+docker compose run --rm new-comm-builder \
+  cat /data/worktrees/<WI>/banking/.claude/repo-paths.json
+```
+- [ ] Both worktree paths listed
+
+### 49. [VM] The worktree is clean — the most important check
+
+```bash
+docker compose run --rm new-comm-builder \
+  sh -c 'cd /data/worktrees/<WI>/banking && git status --porcelain'
+```
+- [ ] Output is **completely empty**
+
+This proves `.git/info/exclude` is holding and that no `.agent/` or `.claude/` scaffolding can
+ever reach a pull request diff. If anything shows up here, stop and fix it before rung 4.
+
+### 50. [VM] The planner wrote its artifact
+
+```bash
+docker compose run --rm new-comm-builder \
+  cat /data/worktrees/<WI>/banking/.agent/plan/questions.json
+```
+- [ ] Valid JSON with `blocking` and/or `ambiguities`
+
+### 51. [ADO] Answer and re-trigger
+
 1. Answer the questions in a work item comment.
 2. Re-add the `create-new-comm` tag.
-3. ```bash
-   docker compose run --rm new-comm-builder bun run src/cli/index.ts run-once
-   ```
 
-- [ ] The item is picked up (it's `awaiting-answers`, so `shouldProcess` returns true)
-- [ ] The planner's second round references your answer
-- [ ] `rounds=2`
+- [ ] Answer posted
+- [ ] Trigger tag re-added
 
-### Rung 4 — Full job, no BC, scratch repos
-
-**Point `BANKING_REPO_ID` / `SETUP_FILES_REPO_ID` at scratch repos first.** This rung really
-pushes branches and opens pull requests.
+### 52. [VM] The loop resumes and sees your answer
 
 ```bash
-docker compose run --rm \
-  -e SKIP_BUILD_TEST=true -e MAX_CLARIFY_ROUNDS=0 \
+$S run-once
+```
+- [ ] The item is picked up (it's `awaiting-answers`, so `shouldProcess` returns true)
+- [ ] Round 2 references your answer
+- [ ] `rounds=2`
+
+---
+
+# PHASE H — Rung 4: full job, no BC (steps 53–61)
+
+### 53. Point at scratch repos
+
+This rung really pushes branches and opens pull requests. Swap `BANKING_REPO_ID` and
+`SETUP_FILES_REPO_ID` in `.env.new-comm-builder` for scratch repo GUIDs.
+
+- [ ] Both IDs now point at scratch repos
+
+Pointing this at the real Continia Banking repo before rung 3 is green is the one mistake in
+this sequence that's genuinely annoying to undo.
+
+### 54. [VM] Reset the item so it runs from scratch
+
+```bash
+$S reset-item <WI>
+```
+- [ ] State cleared
+
+### 55. [ADO] Put the trigger tag back
+
+- [ ] `create-new-comm` present, `create-new-comm-waiting` removed
+
+### 56. [VM] Run the full pipeline with BC skipped
+
+```bash
+docker compose run --rm -e SKIP_BUILD_TEST=true -e MAX_CLARIFY_ROUNDS=0 \
   new-comm-builder bun run src/cli/index.ts run-item <WI>
 ```
 
-`MAX_CLARIFY_ROUNDS=0` forces it past the clarify loop straight into implement;
-`SKIP_BUILD_TEST=true` makes verify return passed without touching BC. So this isolates
-implement → commit → push → two draft PRs → success comment → done tag → cleanup.
+`MAX_CLARIFY_ROUNDS=0` forces it past the clarify loop into implement; `SKIP_BUILD_TEST=true`
+makes verify return passed without touching BC. So this isolates implement → commit → push →
+draft PRs → comment → done tag → cleanup.
 
-- [ ] A draft PR exists on each repo that changed, linked to `<WI>`
-- [ ] PR description says verification was **skipped** — it must not claim a pass
-- [ ] Success comment on the work item links both PRs
+- [ ] Finishes with `phase=done`
+
+### 57. [ADO] Draft PRs exist
+
+- [ ] One draft PR per repo that changed, each linked to `<WI>`
+- [ ] Both are **drafts**
+
+### 58. [ADO] The PR description is honest about verification
+
+- [ ] It says verification was **skipped** — it must not claim tests passed
+
+### 59. [ADO] The PR diffs are clean
+
+- [ ] No `.claude/` files in either diff
+- [ ] No `.agent/` files in either diff
+
+### 60. [ADO] Work item was closed out correctly
+
+- [ ] Success comment links both PRs
 - [ ] Tag is now `create-new-comm-done`
-- [ ] `status` shows phase `done`
-- [ ] `/data/worktrees/<WI>` is gone, `/data/repos/*.git` remain
-- [ ] No `.claude/` or `.agent/` files in either PR's diff
 
-Reset before re-running: `reset-item <WI>`, delete the pushed branches, abandon the PRs, and
-put the `create-new-comm` tag back.
+### 61. [VM] Worktrees cleaned up, caches kept
 
-### Rung 5 — The real thing
+```bash
+docker compose run --rm new-comm-builder \
+  sh -c 'ls /data/worktrees/ ; echo "--- repos ---" ; ls /data/repos/'
+```
+- [ ] No `<WI>` directory under worktrees
+- [ ] Both `*.git` mirrors still present
 
-Real repo IDs, `SKIP_BUILD_TEST` unset, `DRAFT_PR=true`. Slow (hours) and the only rung that
-exercises `continia-env-setup → deps → deploy → test`.
+---
+
+# PHASE I — Rung 5: the real thing (steps 62–68)
+
+### 62. Restore the real repo IDs
+
+- [ ] `BANKING_REPO_ID` and `SETUP_FILES_REPO_ID` back to the real GUIDs
+- [ ] `SKIP_BUILD_TEST` not set (or `false`)
+- [ ] `DRAFT_PR` not set (defaults true)
+
+### 63. [VM] Reset the item and re-tag
+
+```bash
+$S reset-item <WI>
+```
+Then re-add `create-new-comm` in ADO, and abandon the scratch PRs from rung 4.
+- [ ] State cleared, trigger tag back, scratch PRs abandoned
+
+### 64. [VM] Start the watcher
 
 ```bash
 docker compose up -d new-comm-builder
 docker compose logs -f new-comm-builder
 ```
+- [ ] Watcher starts and logs its poll interval
 
-- [ ] Verify phase reaches a real BC environment
-- [ ] `/data/logs/<WI>/verify.log` shows the deploy and test run
-- [ ] `.agent/verify/result.json` exists and its verdict **matches what the PR claims**
-- [ ] The BC environment is still running afterwards (cleanup must not stop it)
-- [ ] On a test failure: **no PR**, but the branch is pushed and a failure comment posted
+### 65. [VM] Verify phase reaches BC
 
-That third box is the core non-negotiable: a missing artifact must be treated as failure, never
-as a pass.
+Expect hours. Watch the log.
+
+```bash
+docker compose exec new-comm-builder tail -f /data/logs/<WI>/verify.log
+```
+- [ ] `continia-env-setup` finds or starts an environment
+- [ ] Deploy and test steps run
+
+### 66. [VM] The verify artifact exists and matches the claim
+
+```bash
+docker compose exec new-comm-builder \
+  cat /data/worktrees/<WI>/banking/.agent/verify/result.json
+```
+- [ ] File exists
+- [ ] Its verdict **matches what the PR description claims**
+
+The core non-negotiable: a missing artifact must be treated as failure, never as a pass.
+
+### 67. [VM] The BC environment is still running
+
+Cleanup must never stop or delete it.
+
+```bash
+docker compose run --rm new-comm-builder continia env list --json
+```
+- [ ] The environment used for verification is still up
+
+### 68. [ADO] Outcome is correct for the result
+
+On success:
+- [ ] Draft PR per changed repo, linked to `<WI>`
+- [ ] Tag `create-new-comm-done`
+
+On test failure:
+- [ ] **No PR opened**
+- [ ] Branch still pushed for inspection
+- [ ] Failure comment with the last log lines
+- [ ] Tag `create-new-comm-failed`
 
 ---
 
-# PART 4 — Two behaviours to probe
+# PHASE J — Probe the two unverified behaviours (steps 69–72)
 
-Neither is covered by unit tests, and I'd expect the first to disagree with the docs.
+Neither is covered by unit tests, and I expect the first to disagree with the docs.
 
-### Restart mid-flight
+### 69. Restart mid-flight
 
-`CLAUDE.md` says a container restart "resumes rather than repeats", but `runJob` runs
-planning → implement → verify → publish unconditionally, regardless of the stored phase. So a
+`CLAUDE.md` claims a restart "resumes rather than repeats", but `runJob` runs
+planning → implement → verify → publish unconditionally, regardless of stored phase. So a
 restart probably **re-plans from scratch**, reusing only the branch name and worktree.
 
-Cheapest probe, during rung 3: once `.agent/plan/questions.json` is written, `docker compose
-restart new-comm-builder`, then watch whether the next cycle re-runs the planner.
+During a planning run, once `questions.json` exists:
 
-- [ ] Confirmed: does it resume, or re-plan?
+```bash
+docker compose restart new-comm-builder
+docker compose logs -f new-comm-builder
+```
+- [ ] Record what actually happens: resume, or re-plan?
 
-### Job timeout orphan
+### 70. Job timeout orphan
 
 `withTimeout` (`src/services/watcher.ts:41`) rejects the race, but nothing cancels the in-flight
-`query()`. Set `JOB_TIMEOUT_MINUTES=1` against a real planning run:
+`query()`.
 
 ```bash
 docker compose run --rm -e JOB_TIMEOUT_MINUTES=1 \
   new-comm-builder bun run src/cli/index.ts run-item <WI>
 ```
-
 - [ ] Does `/data/logs/<WI>/plan-1.log` keep growing after the timeout is logged?
 
-### BC contention
+### 71. BC contention with the rest of the stack
 
-Before rung 5, establish whether any other service in the stack drives BC environments
-(`create-scripts-for-videos` needs the AL toolchain). The one-job-at-a-time design only
-serializes *within* this bot; if another service also spins up environments they will contend,
-and a cross-service lock is needed.
+The one-job-at-a-time design only serializes *within* this bot.
 
-- [ ] Checked whether other services touch BC
+```bash
+cd ~/teams/continia-banking
+grep -rl 'continia env\|CONTINIA_API_TOKEN' --include='*.ts' --include='*.md' \
+  DevOps* AzureDevops* CreateScripts* 2>/dev/null
+```
+- [ ] Established whether any other service drives BC environments
+
+If another one does, they will contend during verify and a cross-service lock is needed.
+
+### 72. Confirm the healthcheck is passing
+
+```bash
+docker compose ps new-comm-builder
+```
+- [ ] Status shows `healthy`
 
 ---
 
-# PART 5 — Reference
+# Reference
 
 ## Reset commands
 
 ```bash
 S="docker compose run --rm new-comm-builder bun run src/cli/index.ts"
 
-$S status                      # config + every tracked job
-$S reset-item <WI>             # forget one item so it runs from scratch
-$S reset-state                 # forget everything
-$S cleanup-worktrees <WI>      # remove leftover worktrees
+$S status                  # config + every tracked job
+$S reset-item <WI>         # forget one item so it runs from scratch
+$S reset-state             # forget everything
+$S cleanup-worktrees <WI>  # remove leftover worktrees
 ```
 
-Nuke the cache entirely (forces a fresh seeded clone):
+Nuke the cache entirely, forcing a fresh seeded clone:
 
 ```bash
 docker compose down new-comm-builder
@@ -414,19 +742,17 @@ docker volume rm continia-banking_new-comm-builder-data
 | `/app/.claude/skills/` | Skills baked into the image |
 | `/repos/*` | Host repos, read-only, seed source |
 
-## Summary checklist
+## Progress summary
 
-| Rung | What it proves | Done |
-|---|---|:---:|
-| 1a | Config + credentials load | [ ] |
-| 1b | Linux Continia CLI runs, DemoPortal auth works | [ ] |
-| 1c | 189 tests pass in the image | [ ] |
-| 1d | Container paths correct, `/repos` mounted | [ ] |
-| 2 | ADO read path, no writes | [ ] |
-| 3 | Comments, tag swap, worktrees, skill symlinks, clean `git status` | [ ] |
-| 3b | Answer + re-tag resumes the loop | [ ] |
-| 4 | Implement → push → draft PRs → done tag → cleanup | [ ] |
-| 5 | Real BC verify; artifact matches the PR's claim | [ ] |
-| — | Restart behaviour: resume or re-plan? | [ ] |
-| — | Timeout orphan: log keeps growing? | [ ] |
-| — | BC contention with other services | [ ] |
+| Phase | Steps | What it proves | Done |
+|---|---|---|:---:|
+| A | 1–12 | Files on the VM, CLI binary runs, seed paths known | [ ] |
+| B | 13–20 | Env file correct, service wired into the stack | [ ] |
+| C | 21–26 | Compose parses, headroom exists, image builds | [ ] |
+| D | 27–33 | Config, paths, Continia CLI, skills, tests | [ ] |
+| E | 34–37 | Throwaway work item ready | [ ] |
+| F | 38–40 | ADO read path, zero writes | [ ] |
+| G | 41–52 | Clone seeding, comments, tag swap, skill symlinks, clean worktree | [ ] |
+| H | 53–61 | Implement → push → draft PRs → done tag → cleanup | [ ] |
+| I | 62–68 | Real BC verify; artifact matches the PR's claim | [ ] |
+| J | 69–72 | Restart behaviour, timeout orphan, BC contention | [ ] |
