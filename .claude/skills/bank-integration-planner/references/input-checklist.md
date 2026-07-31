@@ -1,0 +1,46 @@
+# Phase 0 — Required Inputs
+
+Gather and confirm these before planning. Missing items are fine to start with — Phase 1's `validate-information` agent decides which gaps are *blocking* vs which become Open Questions.
+
+| Input | Required? | Notes |
+|-------|-----------|-------|
+| **New bank name** | yes | PascalCase, no spaces (e.g. `AccessPay`, `Konfipay`). Becomes the object-name stem (`CTS-CB <Name> Auth`). |
+| **Reference bank** | yes | An existing bank in the codebase whose pattern is closest. Anchors the planners. See the pattern map below. |
+| **Swagger / OpenAPI** | strongly | Path or URL. Without it, endpoint/field planning is guesswork — likely a blocking gap. |
+| **Vendor docs** | optional | Onboarding flows, auth specifics, agreement/SUN concepts. |
+| **Operations in scope** | yes | Any of: payments (PAIN.001), direct debit (PAIN.008), account statements (CAMT.053), payment status. Drives which interfaces are needed. |
+| **Auth type** | if known | OAuth+refresh / SFTP-agreement / certificate / external-wrapper. If unknown, the auth planner infers it from Swagger and flags confidence. |
+| **Output path** | yes | Where to write the design doc + task list JSON. Default: a scratch path beside the inputs. |
+
+## Reference-bank → pattern hints
+
+(From the existing knowledge skills — confirm against the actual Swagger, don't assume.)
+
+| Reference bank | Auth pattern | Notes |
+|----------------|--------------|-------|
+| **Rabobank** | OAuth with refresh tokens | Nordic-style; async auth polling; `IBankAccountAtThirdParty`. |
+| **AccessPay** | SFTP agreement-based | No token expiry; agreement status checks; single unique-reference key. |
+| **Yapily** | External wrapper | Minimal auth codeunit; OAuth handled externally; interactive export variants. |
+| **DNB / Nordea / DanskeBank** | OAuth, Nordic | Common Nordic onboarding flow. |
+| **Konfipay** | German EBICS-alternative | — |
+| **Bizcuit** | Dutch accounting integration | Custom status matching (`IMatch Custom Status`). |
+
+## Minimal object manifest (what a bank usually needs)
+
+Use this to sanity-check that the planners proposed a complete set (≈8–12 objects):
+
+- `CTS-CB <Name> Auth` — `ICommunicationType Auth` (+ `IResponseAuthHandling` for OAuth)
+- `CTS-CB <Name>AuthItem` — `IAuthenticationItem`
+- `CTS-CB <Name> Export` — `ICommunicationType Export` + `IResponseExportHandling`
+- `CTS-CB <Name> Import` — `ICommunicationType Import`
+- `CTS-CB <Name> Assisted Setup` (codeunit) — `IAssisted Bank Account Setup`
+- `CTS-CB <Name> Assisted Setup` (page) — NavigatePage onboarding
+- **Enum registration** — a value in `CommunicationType.Enum.al` wiring all the above
+- **`IGetImportDictionary`** — always a deliberate choice (not optional): bind the shared `GetImportDict. API` (one call returns all accounts) or `GetImportDict. Agrmnt` (per account/agreement). See `references/interface-decisions.md §3`.
+- **Default unless a cited reason forces an override** (each has a `DefaultImplementation` — see `references/interface-decisions.md`):
+  - `CTS-CB <Name>IsAuthValid` — `IIsAuthenticationValid` only when validity needs a non-standard marker; else the default.
+  - `CTS-CB <Name>ComTypeUrlValue` — `ICommunicationTypeSpecificUrlValue` only when the URL segment differs from the bank-system value; else the default.
+  - `CTS-CB <Name>ClnUpBnkAccData` — `ICleanUpBankAccData` **required when** onboarding writes `Bank`/`Bank Account` table fields (clear exactly those); else the no-op default.
+- Optional: `IBankAccountAtThirdParty`, `IMatch Custom Status`.
+
+Object ID range for base-application: `71553575–71553874` (primary) and `72282325–72282424` (extended). Each bank consumes ~8–12 IDs.

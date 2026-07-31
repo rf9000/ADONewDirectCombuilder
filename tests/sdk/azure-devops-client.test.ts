@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach, mock } from 'bun:test';
-import type { AppConfig } from '../../src/types/index.ts';
+import { mockConfig, mockWorkItem } from '../helpers.ts';
 import {
   AzureDevOpsError,
   adoFetch,
@@ -8,25 +8,21 @@ import {
   getWorkItem,
   getWorkItemsBatch,
   updateWorkItemField,
+  getWorkItemComments,
+  addWorkItemComment,
+  parseTags,
+  hasTag,
+  setWorkItemTags,
+  swapWorkItemTags,
+  getBranchTip,
+  createBranch,
+  createPullRequest,
+  buildCloneUrl,
+  buildGitAuthArgs,
 } from '../../src/sdk/azure-devops-client.ts';
 
 const originalFetch = globalThis.fetch;
 let mockFn: ReturnType<typeof mock>;
-
-function mockConfig(): AppConfig {
-  return {
-    org: 'my-org',
-    orgUrl: 'https://dev.azure.com/my-org',
-    project: 'my-project',
-    pat: 'test-pat-token',
-    wiqlQuery: "SELECT [System.Id] FROM workitems WHERE [System.State] = 'New'",
-    pollIntervalMinutes: 5,
-    claudeModel: 'claude-sonnet-4-6',
-    promptPath: './prompt.md',
-    stateDir: '.state',
-    dryRun: false,
-  };
-}
 
 function setMockFetch(body: unknown, status = 200, statusText = 'OK') {
   mockFn = mock(() =>
@@ -296,5 +292,232 @@ describe('error handling', () => {
       expect(adoErr.name).toBe('AzureDevOpsError');
       expect(adoErr.message).toContain('404');
     }
+  });
+});
+
+describe('getWorkItemComments', () => {
+  test('hits the preview comments endpoint and sorts oldest first', async () => {
+    setMockFetch({
+      totalCount: 2,
+      count: 2,
+      comments: [
+        { id: 9, text: 'newer' },
+        { id: 4, text: 'older' },
+      ],
+    });
+
+    const result = await getWorkItemComments(mockConfig(), 42);
+
+    expect(result.map((c) => c.id)).toEqual([4, 9]);
+    const url = mockFn.mock.calls[0]![0] as string;
+    expect(url).toContain('wit/workItems/42/comments');
+    expect(url).toContain('api-version=7.0-preview.3');
+  });
+
+  test('tolerates a response with no comments array', async () => {
+    setMockFetch({ totalCount: 0, count: 0 });
+    const result = await getWorkItemComments(mockConfig(), 42);
+    expect(result).toEqual([]);
+  });
+});
+
+describe('addWorkItemComment', () => {
+  test('posts the comment text', async () => {
+    setMockFetch({ id: 11, text: 'hello' });
+
+    await addWorkItemComment(mockConfig(), 42, 'hello');
+
+    const init = mockFn.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ text: 'hello' });
+  });
+});
+
+describe('tags', () => {
+  test('parseTags splits and trims the semicolon-separated field', () => {
+    const item = mockWorkItem({
+      fields: { 'System.Tags': ' create-new-comm ;banking; ' },
+    });
+    expect(parseTags(item)).toEqual(['create-new-comm', 'banking']);
+  });
+
+  test('parseTags returns empty for a missing or blank field', () => {
+    expect(parseTags(mockWorkItem({ fields: {} }))).toEqual([]);
+    expect(parseTags(mockWorkItem({ fields: { 'System.Tags': '   ' } }))).toEqual([]);
+  });
+
+  test('hasTag is case-insensitive', () => {
+    const item = mockWorkItem({ fields: { 'System.Tags': 'Create-New-Comm' } });
+    expect(hasTag(item, 'create-new-comm')).toBe(true);
+    expect(hasTag(item, 'other')).toBe(false);
+  });
+
+  test('setWorkItemTags joins with a semicolon', async () => {
+    setMockFetch(mockWorkItem());
+    await setWorkItemTags(mockConfig(), 42, ['a', 'b']);
+
+    const init = mockFn.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(init.body as string) as Array<{ value: string }>;
+    expect(body[0]!.value).toBe('a; b');
+  });
+
+  test('swapWorkItemTags removes and adds without disturbing the rest', async () => {
+    setMockFetch(mockWorkItem());
+    const item = mockWorkItem({
+      fields: { 'System.Tags': 'banking; Create-New-Comm; keep-me' },
+    });
+
+    await swapWorkItemTags(
+      mockConfig(),
+      item,
+      ['create-new-comm'],
+      ['create-new-comm-waiting'],
+    );
+
+    const init = mockFn.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(init.body as string) as Array<{ value: string }>;
+    expect(body[0]!.value).toBe('banking; keep-me; create-new-comm-waiting');
+  });
+
+  test('swapWorkItemTags does not duplicate a tag that is already present', async () => {
+    setMockFetch(mockWorkItem());
+    const item = mockWorkItem({ fields: { 'System.Tags': 'Waiting; banking' } });
+
+    await swapWorkItemTags(mockConfig(), item, ['create-new-comm'], ['waiting']);
+
+    const init = mockFn.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(init.body as string) as Array<{ value: string }>;
+    expect(body[0]!.value).toBe('Waiting; banking');
+  });
+});
+
+describe('getBranchTip', () => {
+  test('returns the ref and filters on the branch name', async () => {
+    setMockFetch({ value: [{ name: 'refs/heads/main', objectId: 'abc123' }] });
+
+    const ref = await getBranchTip(mockConfig(), 'repo-guid', 'main');
+
+    expect(ref.objectId).toBe('abc123');
+    const url = mockFn.mock.calls[0]![0] as string;
+    expect(url).toContain('git/repositories/repo-guid/refs');
+    expect(url).toContain('filter=heads/main');
+  });
+
+  test('throws when the branch does not exist', async () => {
+    setMockFetch({ value: [] });
+    await expect(getBranchTip(mockConfig(), 'repo-guid', 'nope')).rejects.toThrow(
+      "Branch 'nope' not found",
+    );
+  });
+});
+
+describe('createBranch', () => {
+  test('posts a ref update from the zero object id', async () => {
+    setMockFetch({ value: [] });
+
+    await createBranch(mockConfig(), 'repo-guid', 'feature/x', 'tip-sha');
+
+    const init = mockFn.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(init.body as string) as Array<Record<string, string>>;
+    expect(body[0]).toEqual({
+      name: 'refs/heads/feature/x',
+      oldObjectId: '0000000000000000000000000000000000000000',
+      newObjectId: 'tip-sha',
+    });
+  });
+});
+
+describe('createPullRequest', () => {
+  test('creates a draft PR linked to the work item', async () => {
+    setMockFetch({
+      pullRequestId: 4321,
+      isDraft: true,
+      repository: { webUrl: 'https://dev.azure.com/my-org/proj/_git/Banking' },
+    });
+    const config = mockConfig();
+
+    const pr = await createPullRequest(config, config.repos.banking, {
+      title: 'Add Acme Bank',
+      description: '- did things',
+      sourceBranch: 'Userstory/agent/42-add-acme',
+      targetBranch: 'main',
+      isDraft: true,
+      workItemIds: [42],
+      reviewerIds: ['reviewer-1'],
+    });
+
+    expect(pr.pullRequestId).toBe(4321);
+    expect(pr.isDraft).toBe(true);
+    expect(pr.repoKey).toBe('banking');
+    expect(pr.url).toBe(
+      'https://dev.azure.com/my-org/proj/_git/Banking/pullrequest/4321',
+    );
+
+    const call = mockFn.mock.calls[0]!;
+    expect(call[0] as string).toContain('git/repositories/banking-guid/pullrequests');
+
+    const body = JSON.parse((call[1] as RequestInit).body as string) as Record<
+      string,
+      unknown
+    >;
+    expect(body.isDraft).toBe(true);
+    expect(body.sourceRefName).toBe('refs/heads/Userstory/agent/42-add-acme');
+    expect(body.targetRefName).toBe('refs/heads/main');
+    expect(body.workItemRefs).toEqual([{ id: '42' }]);
+    expect(body.reviewers).toEqual([{ id: 'reviewer-1' }]);
+  });
+
+  test('omits workItemRefs and reviewers when there are none', async () => {
+    setMockFetch({ pullRequestId: 1, isDraft: false });
+    const config = mockConfig();
+
+    await createPullRequest(config, config.repos.setupFiles, {
+      title: 't',
+      description: 'd',
+      sourceBranch: 'b',
+      targetBranch: 'main',
+      isDraft: false,
+      workItemIds: [],
+      reviewerIds: [],
+    });
+
+    const body = JSON.parse(
+      (mockFn.mock.calls[0]![1] as RequestInit).body as string,
+    ) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('workItemRefs');
+    expect(body).not.toHaveProperty('reviewers');
+  });
+
+  test('falls back to a derived web url when the response omits one', async () => {
+    setMockFetch({ pullRequestId: 7 });
+    const config = mockConfig();
+
+    const pr = await createPullRequest(config, config.repos.banking, {
+      title: 't',
+      description: 'd',
+      sourceBranch: 'b',
+      targetBranch: 'main',
+      isDraft: true,
+    });
+
+    expect(pr.url).toContain('_git/Continia%20Banking/pullrequest/7');
+  });
+});
+
+describe('git credentials', () => {
+  test('the clone url carries no credentials', () => {
+    const config = mockConfig();
+    const url = buildCloneUrl(config, config.repos.banking);
+    expect(url).toBe(
+      'https://dev.azure.com/my-org/my-project/_git/Continia%20Banking',
+    );
+    expect(url).not.toContain(config.pat);
+  });
+
+  test('auth is passed per-invocation as an http.extraHeader', () => {
+    const args = buildGitAuthArgs(mockConfig());
+    const expected = Buffer.from(':test-pat-token').toString('base64');
+    expect(args[0]).toBe('-c');
+    expect(args[1]).toBe(`http.extraHeader=Authorization: Basic ${expected}`);
   });
 });

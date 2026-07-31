@@ -1,11 +1,12 @@
 {
-  "name": "devops-pull-template",
+  "name": "ado-new-direct-combuilder",
   "version": "0.1.0",
   "type": "module",
   "module": "src/cli/index.ts",
   "scripts": {
     "start": "bun run src/cli/index.ts watch",
     "once": "bun run src/cli/index.ts run-once",
+    "status": "bun run src/cli/index.ts status",
     "test": "bun test --preload ./tests/setup.ts tests/**/*.test.ts",
     "test:unit": "bun test --preload ./tests/setup.ts ./tests/config/ ./tests/sdk/ ./tests/state/ ./tests/services/",
     "test:integration": "bun test --preload ./tests/setup.ts tests/integration/**/*.test.ts",

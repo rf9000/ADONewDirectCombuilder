@@ -4,22 +4,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DevOpsPullTemplate is a GitHub template repository for Azure DevOps automation projects. It provides production-ready scaffolding for periodically pulling data from Azure DevOps, processing it with Claude AI, and pushing results back. The shipped example processes work items via WIQL queries.
+An unattended agent that turns an Azure DevOps work item tagged `create-new-comm` into two draft
+pull requests implementing a new bank communication for Continia Banking. It polls ADO, plans with
+the `bank-integration-planner` skill, loops back to the human via work item comments while anything
+is ambiguous, implements the plan in git worktrees of the Continia Banking and setup-files repos,
+verifies it on a real BC environment, and opens a draft PR per repo. Runs on a Linux VM under
+docker-compose.
 
 ## Architecture
 
 - **Runtime:** Bun (TypeScript)
 - **Validation:** Zod for environment config
-- **AI:** @anthropic-ai/claude-agent-sdk for Claude integration
+- **AI:** @anthropic-ai/claude-agent-sdk — full tool access, skills loaded from the worktree
 - **Testing:** Bun's built-in test framework
 
 ## Key Patterns
 
-- **Dependency injection** via interfaces on all services for testability
-- **Exponential backoff retry** on Azure DevOps API calls (5xx/network errors)
-- **JSON state store** with Set-based O(1) lookups
-- **Polling watcher** with graceful SIGINT/SIGTERM shutdown
-- **WIQL queries** to find work items to process
+- **Phase machine** in `src/services/pipeline.ts`; every transition is persisted to the job record
+  so a container restart resumes rather than repeats
+- **Dependency injection** via interfaces on all services (`PipelineDeps`, `WatcherDeps`,
+  `ProcessorDeps`) so the whole pipeline is testable without network, git, or Claude
+- **JSON artifact handoff, not prose parsing** — each agent phase writes a known file
+  (`plan/questions.json`, `verify/result.json`) that the orchestrator reads
+- **Skill symlinking** — `.claude/skills/*` are linked into each worktree and the agent runs with
+  `settingSources: ['project']`, which is how the SDK discovers them
+- **Exponential backoff retry** on Azure DevOps API calls (5xx/network only; 4xx fails fast)
+- **Serialized jobs** — one at a time; BC cannot run concurrent test jobs on one environment
+- **Tag-swap handshake** — the bot swaps the trigger tag for a waiting tag when it needs answers;
+  re-adding the trigger tag resumes the job
+
+## Non-negotiables
+
+- Never claim tests passed without `verify/result.json` saying so — a missing artifact is a failure
+- Never open a pull request when verification failed; push the branch instead
+- Never leave credentials in `.git/config` — git auth goes through per-invocation
+  `-c http.extraHeader`
+- Never stop or delete the BC environment during cleanup; only the worktrees are removed
 
 ## Commands
 
@@ -27,12 +47,13 @@ DevOpsPullTemplate is a GitHub template repository for Azure DevOps automation p
 - `bun run typecheck` — TypeScript type checking
 - `bun run start` — start the watcher
 - `bun run once` — single poll cycle
+- `bun run status` — show tracked jobs and their phases
 
 ## File Layout
 
-- `src/config/` — Zod env validation
-- `src/sdk/` — Azure DevOps REST client (WIQL queries, work item CRUD)
-- `src/services/` — business logic (processor, watcher, AI generator)
-- `src/state/` — JSON persistence
+- `src/config/` — Zod env validation, tag-derived WIQL
+- `src/sdk/` — Azure DevOps REST client (work items, comments, tags, branches, pull requests)
+- `src/services/` — watcher, processor, pipeline, prompts, agent runner, workspace
+- `src/state/` — per-work-item job records (JSON)
 - `src/types/` — shared interfaces
-- `tests/` — mirrors src/ structure
+- `tests/` — mirrors src/ structure; `tests/helpers.ts` builds configs through `loadConfig`

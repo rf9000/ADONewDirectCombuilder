@@ -3,6 +3,18 @@ dist/
 coverage/
 .env
 .env.*.local
+
+# Holds a PAT for the ADO MCP server
+.mcp.json
+
+# Continia CLI binaries (~200 MB); supplied per-machine, copied into the image
+# by the Dockerfile, which reads .dockerignore rather than this file.
+.tools/
 .state/
 .cache/
 .DS_Store
+
+# Local run output when LOG_DIR/STATE_DIR point inside the repo instead of /data.
+# Agent transcripts can quote repo contents, so they must never be committed.
+logs/
+state/

@@ -1,0 +1,254 @@
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  lstatSync,
+  readdirSync,
+} from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { mockConfig } from '../helpers.ts';
+import {
+  wireSkills,
+  addGitExcludes,
+  mirrorPath,
+  worktreePath,
+  ensureRepoCache,
+} from '../../src/services/workspace.ts';
+
+let root: string;
+let skillsSource: string;
+let worktree: string;
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'workspace-'));
+
+  // A stand-in for this repo's .claude directory.
+  skillsSource = join(root, 'app', '.claude');
+  mkdirSync(join(skillsSource, 'skills', 'bank-integration-planner'), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(skillsSource, 'skills', 'bank-integration-planner', 'SKILL.md'),
+    '# planner',
+    'utf-8',
+  );
+  mkdirSync(join(skillsSource, 'skills', 'continia-test'), { recursive: true });
+  writeFileSync(
+    join(skillsSource, 'skills', 'continia-test', 'SKILL.md'),
+    '# test',
+    'utf-8',
+  );
+  mkdirSync(join(skillsSource, 'commands'), { recursive: true });
+  writeFileSync(join(skillsSource, 'commands', 'fw-create-pr.md'), '# pr', 'utf-8');
+
+  // A stand-in worktree whose .git is a file, as git creates for real worktrees.
+  worktree = join(root, 'worktrees', '42', 'banking');
+  mkdirSync(worktree, { recursive: true });
+  const gitDir = join(root, 'repos', 'banking.git', 'worktrees', 'banking');
+  mkdirSync(gitDir, { recursive: true });
+  writeFileSync(join(worktree, '.git'), `gitdir: ${gitDir}\n`, 'utf-8');
+});
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+function config() {
+  return mockConfig({
+    skillsSourceDir: skillsSource,
+    repoCacheDir: join(root, 'repos'),
+    worktreeRoot: join(root, 'worktrees'),
+  });
+}
+
+function excludeLines(): string[] {
+  const file = join(
+    root,
+    'repos',
+    'banking.git',
+    'worktrees',
+    'banking',
+    'info',
+    'exclude',
+  );
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf-8')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== '');
+}
+
+const repoPaths = {
+  'continia-banking': '/data/worktrees/42/banking',
+  'setup-files': '/data/worktrees/42/setupFiles',
+};
+
+describe('wireSkills', () => {
+  test('symlinks every skill and command into the worktree', () => {
+    wireSkills(config(), worktree, repoPaths);
+
+    const skillsDir = join(worktree, '.claude', 'skills');
+    expect(readdirSync(skillsDir).sort()).toEqual([
+      'bank-integration-planner',
+      'continia-test',
+    ]);
+    expect(readdirSync(join(worktree, '.claude', 'commands'))).toEqual([
+      'fw-create-pr.md',
+    ]);
+  });
+
+  test('links rather than copies, so skill edits take effect next run', () => {
+    wireSkills(config(), worktree, repoPaths);
+
+    const link = join(worktree, '.claude', 'skills', 'continia-test');
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+
+    // Edit the source; the worktree must see it through the link.
+    writeFileSync(
+      join(skillsSource, 'skills', 'continia-test', 'SKILL.md'),
+      '# edited',
+      'utf-8',
+    );
+    expect(readFileSync(join(link, 'SKILL.md'), 'utf-8')).toBe('# edited');
+  });
+
+  test('writes repo-paths.json, which the skills use to find sibling repos', () => {
+    wireSkills(config(), worktree, repoPaths);
+
+    const written = JSON.parse(
+      readFileSync(join(worktree, '.claude', 'repo-paths.json'), 'utf-8'),
+    ) as Record<string, string>;
+    expect(written['continia-banking']).toBe('/data/worktrees/42/banking');
+    expect(written['setup-files']).toBe('/data/worktrees/42/setupFiles');
+  });
+
+  test('excludes everything it adds so nothing lands in a PR diff', () => {
+    wireSkills(config(), worktree, repoPaths);
+
+    const lines = excludeLines();
+    expect(lines).toContain('/.claude/skills/bank-integration-planner');
+    expect(lines).toContain('/.claude/skills/continia-test');
+    expect(lines).toContain('/.claude/commands/fw-create-pr.md');
+    expect(lines).toContain('/.claude/repo-paths.json');
+  });
+
+  test('never clobbers a skill the target repo ships itself', () => {
+    const ownSkill = join(worktree, '.claude', 'skills', 'continia-test');
+    mkdirSync(ownSkill, { recursive: true });
+    writeFileSync(join(ownSkill, 'SKILL.md'), '# the repo owns this', 'utf-8');
+
+    wireSkills(config(), worktree, repoPaths);
+
+    expect(lstatSync(ownSkill).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(ownSkill, 'SKILL.md'), 'utf-8')).toBe(
+      '# the repo owns this',
+    );
+    // The other skill still gets linked.
+    expect(
+      lstatSync(join(worktree, '.claude', 'skills', 'bank-integration-planner'))
+        .isSymbolicLink(),
+    ).toBe(true);
+  });
+
+  test('is idempotent across repeated runs', () => {
+    const cfg = config();
+    wireSkills(cfg, worktree, repoPaths);
+    wireSkills(cfg, worktree, repoPaths);
+
+    const lines = excludeLines();
+    const planner = lines.filter(
+      (l) => l === '/.claude/skills/bank-integration-planner',
+    );
+    expect(planner).toHaveLength(1);
+  });
+
+  test('skips .claude subdirectories that do not exist in the source', () => {
+    wireSkills(config(), worktree, repoPaths);
+    // No agents/ or rules/ in our fixture — they must not be created empty.
+    expect(existsSync(join(worktree, '.claude', 'agents'))).toBe(false);
+    expect(existsSync(join(worktree, '.claude', 'rules'))).toBe(false);
+  });
+});
+
+describe('addGitExcludes', () => {
+  test('resolves the per-worktree gitdir from the .git file', () => {
+    addGitExcludes(worktree, ['/.agent/']);
+    expect(excludeLines()).toContain('/.agent/');
+  });
+
+  test('appends without duplicating existing entries', () => {
+    addGitExcludes(worktree, ['/.agent/']);
+    addGitExcludes(worktree, ['/.agent/', '/other']);
+
+    const lines = excludeLines();
+    expect(lines.filter((l) => l === '/.agent/')).toHaveLength(1);
+    expect(lines).toContain('/other');
+  });
+
+  test('handles a plain .git directory as well', () => {
+    const plain = join(root, 'plain');
+    mkdirSync(join(plain, '.git'), { recursive: true });
+
+    addGitExcludes(plain, ['/x']);
+
+    expect(
+      readFileSync(join(plain, '.git', 'info', 'exclude'), 'utf-8'),
+    ).toContain('/x');
+  });
+
+  test('does nothing when there is no git directory', () => {
+    const notARepo = join(root, 'not-a-repo');
+    mkdirSync(notARepo, { recursive: true });
+    expect(() => addGitExcludes(notARepo, ['/x'])).not.toThrow();
+  });
+
+  test('does nothing for an empty path list', () => {
+    addGitExcludes(worktree, []);
+    expect(excludeLines()).toEqual([]);
+  });
+});
+
+describe('path helpers', () => {
+  test('mirrorPath is keyed by repo key', () => {
+    const cfg = config();
+    expect(mirrorPath(cfg, cfg.repos.banking)).toBe(
+      join(root, 'repos', 'banking.git'),
+    );
+    expect(mirrorPath(cfg, cfg.repos.setupFiles)).toBe(
+      join(root, 'repos', 'setupFiles.git'),
+    );
+  });
+
+  test('worktreePath separates repos per work item', () => {
+    const cfg = config();
+    expect(worktreePath(cfg, cfg.repos.banking, 42)).toBe(
+      join(root, 'worktrees', '42', 'banking'),
+    );
+    expect(worktreePath(cfg, cfg.repos.setupFiles, 42)).toBe(
+      join(root, 'worktrees', '42', 'setupFiles'),
+    );
+  });
+});
+
+describe('ensureRepoCache', () => {
+  test('fails with an actionable message when the repo id is unset', async () => {
+    const cfg = config();
+    cfg.repos.banking.id = '';
+    await expect(ensureRepoCache(cfg, cfg.repos.banking)).rejects.toThrow(
+      'BANKING_REPO_ID',
+    );
+  });
+
+  test('names the right variable for the setup-files repo', async () => {
+    const cfg = config();
+    cfg.repos.setupFiles.id = '   ';
+    await expect(ensureRepoCache(cfg, cfg.repos.setupFiles)).rejects.toThrow(
+      'SETUP_FILES_REPO_ID',
+    );
+  });
+});

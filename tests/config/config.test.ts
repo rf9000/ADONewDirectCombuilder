@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { loadConfig } from "../../src/config/index.ts";
+import { loadConfig, buildTagWiql } from "../../src/config/index.ts";
 
 const validEnv: Record<string, string> = {
   AZURE_DEVOPS_PAT: "test-pat-token",
@@ -38,21 +38,32 @@ describe("loadConfig", () => {
   it("applies default values when optional vars are absent", () => {
     const config = loadConfig(validEnv);
 
-    expect(config.pollIntervalMinutes).toBe(15);
-    expect(config.claudeModel).toBe("claude-sonnet-4-6");
-    expect(config.promptPath).toBe(".claude/commands/do-process-item.md");
-    expect(config.stateDir).toBe(".state");
+    expect(config.pollIntervalMinutes).toBe(5);
+    expect(config.triggerTag).toBe("create-new-comm");
+    expect(config.waitingTag).toBe("create-new-comm-waiting");
+    expect(config.maxClarifyRounds).toBe(3);
+    expect(config.stateDir).toBe("/data/state");
+    expect(config.skillsSourceDir).toBe("/app/.claude");
+    expect(config.continiaCliPath).toBe("/usr/local/bin/continia");
   });
 
-  it("uses default WIQL query when not provided", () => {
+  it("derives the WIQL query from the trigger tag", () => {
     const config = loadConfig(validEnv);
-    expect(config.wiqlQuery).toContain("SELECT [System.Id] FROM workitems");
+    expect(config.wiqlQuery).toContain("[System.Tags] CONTAINS 'create-new-comm'");
+    expect(config.wiqlQuery).toContain("[System.State] <> 'Closed'");
   });
 
-  it("uses custom WIQL query when provided", () => {
+  it("re-derives the WIQL query when the trigger tag changes", () => {
+    const config = loadConfig({ ...validEnv, TRIGGER_TAG: "build-me" });
+    expect(config.wiqlQuery).toContain("[System.Tags] CONTAINS 'build-me'");
+    expect(config.wiqlQuery).not.toContain("create-new-comm");
+  });
+
+  it("uses a custom WIQL query when provided", () => {
     const env = {
       ...validEnv,
-      AZURE_DEVOPS_WIQL_QUERY: "SELECT [System.Id] FROM workitems WHERE [System.State] = 'Active'",
+      AZURE_DEVOPS_WIQL_QUERY:
+        "SELECT [System.Id] FROM workitems WHERE [System.State] = 'Active'",
     };
     const config = loadConfig(env);
     expect(config.wiqlQuery).toBe(
@@ -60,21 +71,93 @@ describe("loadConfig", () => {
     );
   });
 
+  it("falls back to the tag query when the override is blank", () => {
+    const config = loadConfig({ ...validEnv, AZURE_DEVOPS_WIQL_QUERY: "   " });
+    expect(config.wiqlQuery).toBe(buildTagWiql("create-new-comm"));
+  });
+
   it("overrides defaults when optional vars are provided", () => {
     const env = {
       ...validEnv,
       POLL_INTERVAL_MINUTES: "30",
-      CLAUDE_MODEL: "claude-opus-4-6",
-      PROMPT_PATH: "custom/prompt.md",
+      CLAUDE_MODEL: "claude-sonnet-5",
       STATE_DIR: "/tmp/state",
+      MAX_CLARIFY_ROUNDS: "1",
+      BRANCH_PREFIX: "feature/bot",
     };
 
     const config = loadConfig(env);
 
     expect(config.pollIntervalMinutes).toBe(30);
-    expect(config.claudeModel).toBe("claude-opus-4-6");
-    expect(config.promptPath).toBe("custom/prompt.md");
+    expect(config.claudeModel).toBe("claude-sonnet-5");
     expect(config.stateDir).toBe("/tmp/state");
+    expect(config.maxClarifyRounds).toBe(1);
+    expect(config.branchPrefix).toBe("feature/bot");
+  });
+
+  it("reads repo targets into the repos map", () => {
+    const config = loadConfig({
+      ...validEnv,
+      BANKING_REPO_ID: "abc-123",
+      BANKING_REPO_NAME: "Continia Banking",
+      SETUP_FILES_REPO_ID: "def-456",
+      SETUP_FILES_REPO_NAME: "Setup Files",
+      SETUP_FILES_DEFAULT_BRANCH: "master",
+    });
+
+    expect(config.repos.banking).toEqual({
+      key: "banking",
+      id: "abc-123",
+      name: "Continia Banking",
+      defaultBranch: "main",
+    });
+    expect(config.repos.setupFiles).toEqual({
+      key: "setupFiles",
+      id: "def-456",
+      name: "Setup Files",
+      defaultBranch: "master",
+    });
+  });
+
+  describe("boolean flags", () => {
+    it("defaults DRAFT_PR to true and SKIP_BUILD_TEST to false", () => {
+      const config = loadConfig(validEnv);
+      expect(config.draftPr).toBe(true);
+      expect(config.skipBuildTest).toBe(false);
+    });
+
+    it.each([
+      ["true", true],
+      ["1", true],
+      ["yes", true],
+      ["ON", true],
+      ["false", false],
+      ["0", false],
+      ["nonsense", false],
+    ])("parses SKIP_BUILD_TEST=%s as %p", (value, expected) => {
+      const config = loadConfig({ ...validEnv, SKIP_BUILD_TEST: value });
+      expect(config.skipBuildTest).toBe(expected);
+    });
+
+    it("treats a blank value as the default", () => {
+      const config = loadConfig({ ...validEnv, DRAFT_PR: "" });
+      expect(config.draftPr).toBe(true);
+    });
+  });
+
+  it("parses PR_REVIEWER_IDS into a trimmed list", () => {
+    const config = loadConfig({ ...validEnv, PR_REVIEWER_IDS: "a, b ,, c" });
+    expect(config.reviewerIds).toEqual(["a", "b", "c"]);
+  });
+
+  it("yields an empty reviewer list when unset", () => {
+    expect(loadConfig(validEnv).reviewerIds).toEqual([]);
+  });
+
+  it("rejects a non-positive poll interval", () => {
+    expect(() => loadConfig({ ...validEnv, POLL_INTERVAL_MINUTES: "0" })).toThrow(
+      "Invalid configuration",
+    );
   });
 
   it("derives orgUrl from org name", () => {

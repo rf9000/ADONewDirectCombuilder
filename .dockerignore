@@ -1,0 +1,20 @@
+node_modules/
+dist/
+coverage/
+.git/
+.gitignore
+.state/
+.cache/
+.env
+.env.*
+!.env.example
+docs/
+
+# Root-level docs only — .claude/skills/**/*.md must stay in the image.
+/README.md
+/PATTERNS.md
+
+# The Windows CLI is 118 MB and useless in a Linux image; the ELF build is copied
+# explicitly by the Dockerfile.
+.tools/continia.exe
+.tools/desktop.ini
