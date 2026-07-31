@@ -44,6 +44,10 @@ const envSchema = z.object({
   MAX_CLARIFY_ROUNDS: z.coerce.number().int().nonnegative().default(3),
 
   // --- Claude ---
+  // Each bot in the stack carries its own key so spend stays attributable. The
+  // Agent SDK reads it from the environment itself, but it is validated here so
+  // a missing key fails on boot rather than mid-run inside the first phase.
+  ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required"),
   CLAUDE_MODEL: z.string().default("claude-opus-5"),
   AGENT_MAX_TURNS: z.coerce.number().int().positive().default(400),
 
@@ -51,9 +55,11 @@ const envSchema = z.object({
   BANKING_REPO_NAME: z.string().default("Continia Banking"),
   BANKING_REPO_ID: z.string().default(""),
   BANKING_DEFAULT_BRANCH: z.string().default("main"),
+  BANKING_SEED_REPO: z.string().default(""),
   SETUP_FILES_REPO_NAME: z.string().default("Continia Banking Setup Files"),
   SETUP_FILES_REPO_ID: z.string().default(""),
   SETUP_FILES_DEFAULT_BRANCH: z.string().default("main"),
+  SETUP_FILES_SEED_REPO: z.string().default(""),
 
   // --- Paths ---
   REPO_CACHE_DIR: z.string().default("/data/repos"),
@@ -63,6 +69,10 @@ const envSchema = z.object({
   SKILLS_SOURCE_DIR: z.string().default("/app/.claude"),
 
   // --- Continia CLI ---
+  // Only the verify phase needs the token, so it is enforced below against
+  // SKIP_BUILD_TEST rather than being unconditionally required — a harness
+  // smoke test should not need a DemoPortal token.
+  CONTINIA_API_TOKEN: z.string().default(""),
   CONTINIA_CLI_PATH: z.string().default("/usr/local/bin/continia"),
 
   // --- Behaviour ---
@@ -85,6 +95,16 @@ export function loadConfig(
   }
 
   const parsed = result.data;
+
+  // The verify phase drives the Continia CLI, and a missing token would only
+  // surface there — after a full plan and implement had already run.
+  if (!parsed.SKIP_BUILD_TEST && parsed.CONTINIA_API_TOKEN.trim() === '') {
+    throw new Error(
+      'Invalid configuration:\n' +
+        '  - CONTINIA_API_TOKEN: required unless SKIP_BUILD_TEST=true, because ' +
+        'the verify phase uses the Continia CLI',
+    );
+  }
 
   return {
     org: parsed.AZURE_DEVOPS_ORG,
@@ -114,12 +134,14 @@ export function loadConfig(
         name: parsed.BANKING_REPO_NAME,
         id: parsed.BANKING_REPO_ID,
         defaultBranch: parsed.BANKING_DEFAULT_BRANCH,
+        seedPath: parsed.BANKING_SEED_REPO.trim() || undefined,
       },
       setupFiles: {
         key: 'setupFiles',
         name: parsed.SETUP_FILES_REPO_NAME,
         id: parsed.SETUP_FILES_REPO_ID,
         defaultBranch: parsed.SETUP_FILES_DEFAULT_BRANCH,
+        seedPath: parsed.SETUP_FILES_SEED_REPO.trim() || undefined,
       },
     },
 

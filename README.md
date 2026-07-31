@@ -37,25 +37,85 @@ bun run src/cli/index.ts help
 Required in `.env`: `AZURE_DEVOPS_PAT`, `AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_PROJECT`,
 `ANTHROPIC_API_KEY`, `CONTINIA_API_TOKEN`, `BANKING_REPO_ID`, `SETUP_FILES_REPO_ID`.
 The PAT needs **Work Items (Read & Write)** and **Code (Read, Write & Manage)**.
+`ANTHROPIC_API_KEY` is this bot's own — not shared with the other services in the stack.
+
+The three ADO values and `ANTHROPIC_API_KEY` are validated on boot. `CONTINIA_API_TOKEN` is
+required only when `SKIP_BUILD_TEST=false`, since the verify phase is the only thing that needs
+it. The two repo GUIDs are checked when the repo cache is first built — `status` prints
+`ID NOT SET` for a missing one.
 
 Every tag, repo id, model, interval and path is configurable — see `.env.example`.
 
+On a host that already has the product repos checked out, set `BANKING_SEED_REPO` and
+`SETUP_FILES_SEED_REPO` to those paths. The first bare clone then borrows objects locally
+(`git clone --reference … --dissociate`) instead of pulling gigabytes from Azure DevOps. Objects
+are copied and the alternate dropped, so the cache survives the seed disappearing; a path that
+isn't a git repo is warned about and ignored rather than fatal.
+
 ## Running on the Linux VM
 
-```bash
-docker compose build
-docker compose run --rm agent bun run src/cli/index.ts status      # config sanity check
-docker compose run --rm agent continia env list --json             # CLI auth check
-docker compose up -d
-docker compose logs -f
+This bot is one service in the shared stack at `~/teams/continia-banking`, alongside the other
+Azure DevOps bots. It has no compose file of its own — add this service to the umbrella
+`docker-compose.yml`:
+
+```yaml
+  new-comm-builder:
+    build:
+      context: ./ADONewDirectCombuilder
+      dockerfile: Dockerfile
+    container_name: new-comm-builder
+    restart: unless-stopped
+    env_file:
+      - .env.new-comm-builder
+    volumes:
+      - new-comm-builder-data:/data
+      # Seeds the first bare clone so a multi-gigabyte fetch becomes a local
+      # object copy. Read-only is enough: this bot symlinks skills into its own
+      # worktrees, never into the source repos, and pushes to ADO over HTTPS.
+      - /home/azureuser/repos/continia-banking:/repos/continia-banking:ro
+      - /home/azureuser/repos/continia-banking-setup-files:/repos/continia-banking-setup-files:ro
+    # Cloning Continia Banking and compiling AL are both memory-hungry.
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    healthcheck:
+      test: ["CMD", "bun", "run", "src/cli/index.ts", "status"]
+      interval: 5m
+      timeout: 60s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
 ```
 
-State, repo mirrors, worktrees, logs and the AL compiler cache all live in the `agent-data`
-volume, so restarts and image rebuilds resume rather than restart.
+Plus `new-comm-builder-data:` in the top-level `volumes:` block. Then from `~/teams/continia-banking`:
+
+```bash
+docker compose build new-comm-builder
+docker compose run --rm new-comm-builder bun run src/cli/index.ts status   # config check
+docker compose run --rm new-comm-builder continia env list --json          # CLI auth check
+docker compose up -d new-comm-builder
+docker compose logs -f new-comm-builder
+```
+
+Unlike the other services in the stack, this one does **not** mount the host's `~/.claude`.
+It carries its own `ANTHROPIC_API_KEY` in `.env.new-comm-builder` so spend and rate limits stay
+attributable per bot, and its skills are baked into the image rather than shared — the pipeline's
+invariants depend on specific skill behaviour, so they are version-pinned with the code.
+
+State, repo mirrors, worktrees, logs and the AL compiler cache all live in the
+`new-comm-builder-data` volume, so restarts and image rebuilds resume rather than restart. It is
+one large volume rather than the fleet's usual small `/app/.state` because this bot caches bare
+clones and the AL compiler.
 
 **The build context must contain `.tools/continia-linux`** (the ELF build of the Continia CLI) —
-the Dockerfile copies it to `/usr/local/bin/continia`. The Windows `continia.exe` is excluded
-from the image.
+the Dockerfile copies it to `/usr/local/bin/continia`, so the build fails outright without it.
+`.tools/` is gitignored, so copy it in out-of-band. The Windows `continia.exe` is excluded from
+the image.
 
 ### MCP servers
 

@@ -20,6 +20,11 @@ export interface RunResult {
   stderr: string;
 }
 
+function log(message: string): void {
+  const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  console.log(`[${ts}] ${message}`);
+}
+
 /**
  * Run a command without a shell, so PATs and paths with spaces can never be
  * re-interpreted. Rejects on non-zero exit unless `allowFailure` is set.
@@ -90,6 +95,22 @@ export function worktreePath(
 }
 
 /**
+ * Accept a seed path only when it really is a git repository — either a working
+ * clone (`.git`) or a bare one (`HEAD`). `git clone --reference` fails outright
+ * on a path that is not a repo, and a misconfigured or unmounted seed should
+ * cost us the speedup, not the job.
+ */
+export function resolveSeedRepo(seedPath?: string): string | undefined {
+  if (!seedPath || seedPath.trim() === '') return undefined;
+
+  const path = resolve(seedPath.trim());
+  if (existsSync(join(path, '.git')) || existsSync(join(path, 'HEAD'))) return path;
+
+  log(`  Warning: seed repo '${seedPath}' is not a git repository — cloning from origin`);
+  return undefined;
+}
+
+/**
  * Make sure a bare clone of the repo exists in the cache volume and is current.
  * First call clones (minutes); later calls just fetch.
  *
@@ -113,9 +134,21 @@ export async function ensureRepoCache(
   mkdirSync(config.repoCacheDir, { recursive: true });
 
   if (!existsSync(join(target, 'HEAD'))) {
-    await git(config, ['clone', '--bare', buildCloneUrl(config, repo), target], {
-      authenticated: true,
-    });
+    const seed = resolveSeedRepo(repo.seedPath);
+    await git(
+      config,
+      [
+        'clone',
+        '--bare',
+        // Borrow objects from the local clone, then copy what we need and drop
+        // the alternate: fast first clone without a lasting dependency on a
+        // read-only mount that may not be there next time.
+        ...(seed ? ['--reference', seed, '--dissociate'] : []),
+        buildCloneUrl(config, repo),
+        target,
+      ],
+      { authenticated: true },
+    );
   }
 
   // A bare clone ships no fetch refspec — give it one so updates land in

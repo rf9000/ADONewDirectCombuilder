@@ -5,6 +5,8 @@ const validEnv: Record<string, string> = {
   AZURE_DEVOPS_PAT: "test-pat-token",
   AZURE_DEVOPS_ORG: "my-org",
   AZURE_DEVOPS_PROJECT: "my-project",
+  ANTHROPIC_API_KEY: "sk-ant-test",
+  CONTINIA_API_TOKEN: "demoportal-test-token",
 };
 
 describe("loadConfig", () => {
@@ -33,6 +35,51 @@ describe("loadConfig", () => {
     const env = { ...validEnv };
     delete env.AZURE_DEVOPS_PROJECT;
     expect(() => loadConfig(env)).toThrow("Invalid configuration");
+  });
+
+  // Each bot carries its own key; without this the failure surfaces deep inside
+  // the first agent run instead of on boot.
+  it("throws naming ANTHROPIC_API_KEY when it is absent", () => {
+    const env = { ...validEnv };
+    delete env.ANTHROPIC_API_KEY;
+    expect(() => loadConfig(env)).toThrow("ANTHROPIC_API_KEY");
+  });
+
+  it("rejects a blank ANTHROPIC_API_KEY", () => {
+    expect(() => loadConfig({ ...validEnv, ANTHROPIC_API_KEY: "" })).toThrow(
+      "ANTHROPIC_API_KEY is required",
+    );
+  });
+
+  // Without this the token's absence only surfaces in the verify phase, after a
+  // full plan and implement have already run.
+  it("requires CONTINIA_API_TOKEN when the verify phase will run", () => {
+    const env = { ...validEnv };
+    delete env.CONTINIA_API_TOKEN;
+    expect(() => loadConfig(env)).toThrow("CONTINIA_API_TOKEN");
+  });
+
+  it("does not require CONTINIA_API_TOKEN when the build/test phase is skipped", () => {
+    const env: Record<string, string> = { ...validEnv, SKIP_BUILD_TEST: "true" };
+    delete env.CONTINIA_API_TOKEN;
+    const config = loadConfig(env);
+    expect(config.skipBuildTest).toBe(true);
+  });
+
+  it("leaves seed repo paths undefined unless configured", () => {
+    const config = loadConfig(validEnv);
+    expect(config.repos.banking.seedPath).toBeUndefined();
+    expect(config.repos.setupFiles.seedPath).toBeUndefined();
+  });
+
+  it("parses seed repo paths and ignores blank ones", () => {
+    const config = loadConfig({
+      ...validEnv,
+      BANKING_SEED_REPO: "/repos/continia-banking",
+      SETUP_FILES_SEED_REPO: "   ",
+    });
+    expect(config.repos.banking.seedPath).toBe("/repos/continia-banking");
+    expect(config.repos.setupFiles.seedPath).toBeUndefined();
   });
 
   it("applies default values when optional vars are absent", () => {

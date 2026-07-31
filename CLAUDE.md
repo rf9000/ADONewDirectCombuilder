@@ -29,6 +29,14 @@ docker-compose.
 - **Skill symlinking** — `.claude/skills/*` are linked into each worktree and the agent runs with
   `settingSources: ['project']`, which is how the SDK discovers them
 - **Exponential backoff retry** on Azure DevOps API calls (5xx/network only; 4xx fails fast)
+- **Seeded first clone** — `BANKING_SEED_REPO`/`SETUP_FILES_SEED_REPO` point at the host's
+  read-only repo mounts, so the initial bare clone borrows objects locally via
+  `--reference … --dissociate`. `--dissociate` is deliberate: it copies the objects and drops
+  the alternate, so the cache cannot break when a bind mount disappears
+- **Own API key, own skills** — this bot runs in the shared `~/teams/continia-banking` stack but
+  deliberately does not mount the host `~/.claude`: it carries its own `ANTHROPIC_API_KEY` so
+  spend stays attributable, and bakes skills into the image so the pipeline's artifact contracts
+  are version-pinned rather than changing under it when a shared skill is edited
 - **Serialized jobs** — one at a time; BC cannot run concurrent test jobs on one environment
 - **Tag-swap handshake** — the bot swaps the trigger tag for a waiting tag when it needs answers;
   re-adding the trigger tag resumes the job

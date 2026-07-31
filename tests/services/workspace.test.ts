@@ -18,6 +18,7 @@ import {
   mirrorPath,
   worktreePath,
   ensureRepoCache,
+  resolveSeedRepo,
 } from '../../src/services/workspace.ts';
 
 let root: string;
@@ -250,5 +251,38 @@ describe('ensureRepoCache', () => {
     await expect(ensureRepoCache(cfg, cfg.repos.setupFiles)).rejects.toThrow(
       'SETUP_FILES_REPO_ID',
     );
+  });
+});
+
+describe('resolveSeedRepo', () => {
+  test('is undefined when no seed is configured', () => {
+    expect(resolveSeedRepo(undefined)).toBeUndefined();
+    expect(resolveSeedRepo('')).toBeUndefined();
+    expect(resolveSeedRepo('   ')).toBeUndefined();
+  });
+
+  test('accepts a working clone (has .git)', () => {
+    const seed = join(root, 'seed-working');
+    mkdirSync(join(seed, '.git'), { recursive: true });
+    expect(resolveSeedRepo(seed)).toBe(seed);
+  });
+
+  test('accepts a bare clone (has HEAD)', () => {
+    const seed = join(root, 'seed-bare.git');
+    mkdirSync(seed, { recursive: true });
+    writeFileSync(join(seed, 'HEAD'), 'ref: refs/heads/main\n', 'utf-8');
+    expect(resolveSeedRepo(seed)).toBe(seed);
+  });
+
+  // A bind mount that vanished must cost the speedup, not the job: git clone
+  // --reference fails outright on a path that is not a repository.
+  test('falls back to a plain clone when the path is not a git repo', () => {
+    const seed = join(root, 'seed-empty');
+    mkdirSync(seed, { recursive: true });
+    expect(resolveSeedRepo(seed)).toBeUndefined();
+  });
+
+  test('falls back to a plain clone when the path does not exist', () => {
+    expect(resolveSeedRepo(join(root, 'does-not-exist'))).toBeUndefined();
   });
 });

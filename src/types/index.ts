@@ -8,6 +8,14 @@ export interface RepoTarget {
   id: string;
   /** Branch new work is based on and pull requests target. */
   defaultBranch: string;
+  /**
+   * Optional path to a local clone of the same repo, used only to seed the
+   * first bare clone (`git clone --reference`). On the deployment host the
+   * product repos are already bind-mounted read-only, so seeding turns a
+   * multi-gigabyte download into a local object copy. Objects are copied and
+   * the alternate dropped, so the cache never depends on the mount surviving.
+   */
+  seedPath?: string;
 }
 
 /** Application configuration loaded from environment variables. */

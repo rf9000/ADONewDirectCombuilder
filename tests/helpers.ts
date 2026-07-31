@@ -7,6 +7,8 @@ export function mockConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     AZURE_DEVOPS_PAT: 'test-pat-token',
     AZURE_DEVOPS_ORG: 'my-org',
     AZURE_DEVOPS_PROJECT: 'my-project',
+    ANTHROPIC_API_KEY: 'sk-ant-test',
+    CONTINIA_API_TOKEN: 'demoportal-test-token',
     BANKING_REPO_ID: 'banking-guid',
     SETUP_FILES_REPO_ID: 'setup-files-guid',
   });
