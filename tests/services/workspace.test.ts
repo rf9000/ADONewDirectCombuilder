@@ -127,14 +127,13 @@ describe('wireSkills', () => {
     expect(written['setup-files']).toBe('/data/worktrees/42/setupFiles');
   });
 
-  test('excludes everything it adds so nothing lands in a PR diff', () => {
+  test('excludes the whole .claude directory, not just the entries it adds', () => {
     wireSkills(config(), worktree, repoPaths);
 
-    const lines = excludeLines();
-    expect(lines).toContain('/.claude/skills/bank-integration-planner');
-    expect(lines).toContain('/.claude/skills/continia-test');
-    expect(lines).toContain('/.claude/commands/fw-create-pr.md');
-    expect(lines).toContain('/.claude/repo-paths.json');
+    // Enumerating entries missed whatever the Agent SDK writes at runtime, and
+    // a real run reported `?? .claude/` in setup-files, whose .gitignore — unlike
+    // Continia Banking's — does not cover it.
+    expect(excludeLines()).toContain('/.claude/');
   });
 
   test('never clobbers a skill the target repo ships itself', () => {
@@ -161,10 +160,7 @@ describe('wireSkills', () => {
     wireSkills(cfg, worktree, repoPaths);
 
     const lines = excludeLines();
-    const planner = lines.filter(
-      (l) => l === '/.claude/skills/bank-integration-planner',
-    );
-    expect(planner).toHaveLength(1);
+    expect(lines.filter((l) => l === '/.claude/')).toHaveLength(1);
   });
 
   test('skips .claude subdirectories that do not exist in the source', () => {
@@ -232,6 +228,16 @@ describe('addGitExcludes', () => {
     const status = await run(['status', '--porcelain'], linked);
     expect(status).toContain('stray.txt');
     expect(status).not.toContain('.agent');
+
+    // A repo whose own .gitignore does not cover .claude must still be clean,
+    // including files nobody enumerated — this is what setup-files exposed.
+    addGitExcludes(linked, ['/.claude/']);
+    mkdirSync(join(linked, '.claude'), { recursive: true });
+    writeFileSync(join(linked, '.claude', 'unexpected-sdk-file.json'), '{}', 'utf-8');
+
+    const after = await run(['status', '--porcelain'], linked);
+    expect(after).toContain('stray.txt');
+    expect(after).not.toContain('.claude');
   });
 
   test('appends without duplicating existing entries', () => {

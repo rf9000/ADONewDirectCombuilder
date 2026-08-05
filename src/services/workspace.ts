@@ -271,7 +271,6 @@ export function wireSkills(
       // Never clobber a skill the target repo ships itself — theirs wins.
       if (existsSync(dest) || isSymlink(dest)) continue;
       symlinkSync(join(sourceDir, entry), dest, 'junction');
-      excluded.push(`/.claude/${dir}/${entry}`);
     }
   }
 
@@ -283,9 +282,17 @@ export function wireSkills(
     'utf-8',
   );
 
-  for (const file of GENERATED_CLAUDE_FILES) {
-    excluded.push(`/.claude/${file}`);
-  }
+  // Exclude the whole directory, not the entries we happen to create.
+  //
+  // Enumerating them missed whatever the Agent SDK writes at runtime, and the
+  // gap was invisible in Continia Banking because its own .gitignore covers
+  // `.claude`. setup-files does not, so a real run reported `?? .claude/` there
+  // and it would have landed in the setup-files pull request. Nothing under
+  // `.claude/` should ever be committed to a product repo, so say that once.
+  //
+  // This cannot hide a file a product repo genuinely tracks: info/exclude only
+  // affects untracked files.
+  excluded.push('/.claude/');
 
   addGitExcludes(worktree, excluded);
 }
