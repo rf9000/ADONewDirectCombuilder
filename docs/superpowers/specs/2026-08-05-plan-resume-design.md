@@ -17,9 +17,25 @@ So planning re-runs on every one of these:
 - a verification failure followed by a retry (waste)
 - `reset-item` (intended)
 
-Measured cost on work item 80969: a full four-domain planning pass with adversarial
-verification takes roughly 40 minutes and produces a 136 KB design doc and a 191 KB task
-list. A VM stop during round 2 cost that twice.
+Measured on work item 80969:
+
+| Phase | Wall clock | Cost | Turns |
+|---|---|---|---|
+| planning, one ungated round | 5 min | $2.31 | 38 |
+| planning, one gated round with adversarial verification | ~40 min | — | — |
+| implementing | 28 min | **$37.77** | 129 |
+
+**Implement is roughly 16× the cost of a planning pass.** So while the visible symptom is
+re-planning, the money is in the phases after it: a VM stop 25 minutes into implement
+costs $37.77 to redo, and today that is exactly what happens — re-entry restarts at
+planning and walks forward through implement again.
+
+That also settles the scope question below with evidence rather than instinct.
+Re-planning on each clarify round costs about $2.31, so making clarification incremental
+would be real work to save pocket change.
+
+A gated planning round additionally produces a 136 KB design doc and a 191 KB task list,
+which motivates the attachment in section 5.
 
 A second, compounding defect: the failure path deletes the worktrees
 (`pipeline.ts:521`, *"Leave nothing behind: a retry re-clones from the current default
@@ -31,7 +47,8 @@ where to resume also destroys what resuming needs.
 In scope: resume at the recorded phase. The clarify loop is untouched — round N still
 re-plans in full, because new answers should produce a fresh plan. Making clarification
 incremental is a separate, larger question that touches the planner skill's contract
-rather than the orchestrator, and is deliberately excluded here.
+rather than the orchestrator, and the measured $2.31 per round means it is not where the
+money is. Deliberately excluded.
 
 ## Design
 
