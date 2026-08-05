@@ -1,9 +1,10 @@
-import { mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type {
   AgentRunResult,
   AppConfig,
   ItemProcessResult,
+  JobPhase,
   JobRecord,
   PlanArtifacts,
   PlanQuestions,
@@ -18,6 +19,8 @@ import * as ado from '../sdk/azure-devops-client.ts';
 import * as ws from './workspace.ts';
 import * as runner from './agent-runner.ts';
 import * as prompts from './prompts.ts';
+import { resolveEntryPhase } from './entry-phase.ts';
+import type { PhaseInputs } from './entry-phase.ts';
 
 /** Artifacts live here inside the banking worktree; git-excluded, never committed. */
 const AGENT_DIR = '.agent';
@@ -200,10 +203,19 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
       ambiguities: [],
     };
 
+  // The watermark is the newest *unmarked* comment at plan time, not simply
+  // the newest comment — our own questions/failure/success comments must
+  // never advance it, or the staleness check above would see its own
+  // comments as new input on the very next run. Falls back to the existing
+  // value when there are no unmarked comments at all.
+  const newestUnmarkedCommentId = ctx.comments
+    .filter((c) => !prompts.isBotComment(c.text ?? ''))
+    .reduce((max, c) => Math.max(max, c.id), job.lastSeenCommentId);
+
   store.update(item.id, {
     plannerSessionId: result.sessionId,
     designDocPath: artifacts?.designDocPath ?? paths.designDocPath,
-    lastSeenCommentId: ctx.comments.at(-1)?.id ?? job.lastSeenCommentId,
+    lastSeenCommentId: newestUnmarkedCommentId,
   });
   store.save();
 
@@ -443,7 +455,24 @@ export async function runJob(
 
   try {
     const comments = await deps.getWorkItemComments(config, item.id);
-    const worktrees = await prepareWorkspaces(config, item, branch, deps);
+
+    // A human comment newer than the plan means the plan was made without
+    // that input, so it forces a re-plan regardless of the recorded phase.
+    // The pipeline's own comments (failure report, questions, success) must
+    // not count, or every retry would look like a new comment arrived and
+    // `failedAtPhase` would never be reachable.
+    //
+    // Gated on there being a plan at all (`lastSeenCommentId > 0`): a
+    // brand-new job's watermark is 0, and any human comment on the item
+    // would otherwise compare greater, logging "stale" for a job that was
+    // never planned in the first place.
+    const newestHumanCommentId = comments
+      .filter((c) => !prompts.isBotComment(c.text ?? ''))
+      .reduce((max, c) => Math.max(max, c.id), 0);
+    const hasNewComments =
+      job.lastSeenCommentId > 0 && newestHumanCommentId > job.lastSeenCommentId;
+
+    let worktrees = await prepareWorkspaces(config, item, branch, deps);
 
     ctx = {
       config,
@@ -458,39 +487,106 @@ export async function runJob(
       workItemContext: prompts.buildWorkItemContext(item, comments, config),
     };
 
-    // ---- plan, and loop back to the human while anything is unresolved ----
-    const questions = await runPlanningPhase(ctx);
-    const unresolved = questions.blocking.length + questions.ambiguities.length;
+    const inputs: PhaseInputs = {
+      taskList: existsSync(ctx.paths.taskListPath),
+      implementSummary: existsSync(ctx.paths.implementSummaryPath),
+      verifyResult: existsSync(ctx.paths.verifyResultPath),
+    };
 
-    if (unresolved > 0 && ctx.job.clarifyRounds < config.maxClarifyRounds) {
-      await runAwaitingAnswersPhase(ctx, questions);
-      return { itemId: item.id, processed: true, phase: 'awaiting-answers' };
+    // `job` (fetched before this run touched anything) is what the resolver
+    // needs — the recorded phase, `failedAtPhase`, and (below) whether a
+    // worktree already exists here from an earlier run.
+    const entry = resolveEntryPhase(job, inputs, hasNewComments);
+    log(`  Item #${item.id}: entering at ${entry.phase} — ${entry.reason}`);
+
+    // Landing on planning must not inherit a previous round's state:
+    // createWorktree returns an existing directory untouched
+    // (workspace.ts:183), so without a wipe a "fresh" run would keep the
+    // previous plan's design doc, task list and any half-built code that was
+    // implemented against a now-superseded plan.
+    //
+    // Only worth doing when a worktree from an earlier run is actually
+    // recorded on the job — a job that has never run has nothing to clean,
+    // and the unconditional `prepareWorkspaces` above already gave it an
+    // empty worktree.
+    if (entry.cleanWorkspace && Object.keys(job.worktrees ?? {}).length > 0) {
+      await deps.removeAllWorktrees(config, item.id);
+      worktrees = await prepareWorkspaces(config, item, branch, deps);
+      ctx.worktrees = worktrees;
+      ctx.paths = pathsFor(worktrees.banking);
     }
 
-    if (unresolved > 0) {
-      log(
-        `  Item #${item.id}: ${unresolved} item(s) still open after ` +
-          `${config.maxClarifyRounds} round(s) — proceeding on documented defaults`,
-      );
+    // Every transition is persisted, and that now includes which worktrees
+    // this job is using — a later invocation (a retry, a container restart,
+    // or the next clarify round within this same run) needs this recorded to
+    // know a worktree already exists here and must be wiped before a fresh
+    // plan is written into it.
+    store.update(item.id, {
+      worktrees: { banking: worktrees.banking, setupFiles: worktrees.setupFiles },
+    });
+
+    // Run forward from the resolved entry point. The four phases stay in
+    // their existing order; `runs` just says whether a given phase is at or
+    // after where this run is entering.
+    const order: JobPhase[] = ['planning', 'implementing', 'verifying', 'publishing'];
+    const from = order.indexOf(entry.phase);
+    const runs = (phase: JobPhase) => order.indexOf(phase) >= from;
+
+    // ---- plan, and loop back to the human while anything is unresolved ----
+    if (runs('planning')) {
+      const questions = await runPlanningPhase(ctx);
+      const unresolved = questions.blocking.length + questions.ambiguities.length;
+
+      if (unresolved > 0 && ctx.job.clarifyRounds < config.maxClarifyRounds) {
+        await runAwaitingAnswersPhase(ctx, questions);
+        return { itemId: item.id, processed: true, phase: 'awaiting-answers' };
+      }
+
+      if (unresolved > 0) {
+        log(
+          `  Item #${item.id}: ${unresolved} item(s) still open after ` +
+            `${config.maxClarifyRounds} round(s) — proceeding on documented defaults`,
+        );
+      }
     }
 
     // ---- build ----
-    await runImplementPhase(ctx);
+    if (runs('implementing')) {
+      await runImplementPhase(ctx);
 
-    const anyChanges =
-      (await deps.hasChanges(config, worktrees.banking)) ||
-      (await deps.hasChanges(config, worktrees.setupFiles));
-    if (!anyChanges) {
-      throw new Error(
-        'The implement phase produced no file changes — nothing to review, so no PR was opened.',
-      );
+      const anyChanges =
+        (await deps.hasChanges(config, worktrees.banking)) ||
+        (await deps.hasChanges(config, worktrees.setupFiles));
+      if (!anyChanges) {
+        throw new Error(
+          'The implement phase produced no file changes — nothing to review, so no PR was opened.',
+        );
+      }
     }
 
     // ---- verify ----
-    const verify = await runVerifyPhase(ctx);
+    let verify: VerifyResult;
+    if (runs('verifying')) {
+      verify = await runVerifyPhase(ctx);
+    } else {
+      // Entered directly at publishing: resolveEntryPhase only lands there
+      // when verify/result.json already exists on disk (its own
+      // precondition), so read the prior run's result instead of
+      // re-verifying. Falls back defensively — the file could vanish
+      // between the existence check above and here — rather than trust a
+      // read that came back empty.
+      verify = deps.readJsonArtifact<VerifyResult>(ctx.paths.verifyResultPath) ?? {
+        passed: false,
+        summary:
+          'Resumed directly at publishing but verify/result.json is missing, so ' +
+          'the test outcome is unknown.',
+      };
+    }
 
     if (!verify.passed) {
       // Push the work so it is not lost, but do not put red code in a PR.
+      // Applies regardless of how `verify` was obtained, so a verification
+      // failure can never reach publish.
       await deps.commitAndPush(
         config,
         worktrees.banking,
@@ -515,6 +611,8 @@ export async function runJob(
     }
 
     // ---- publish ----
+    // No `runs('publishing')` guard needed: 'publishing' is the last entry in
+    // `order`, so it is always reachable once we get this far.
     const prs = await runPublishPhase(ctx, verify);
 
     await deps.addWorkItemComment(

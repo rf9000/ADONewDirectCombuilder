@@ -29,6 +29,9 @@ import type {
 let root: string;
 let store: StateStore;
 
+/** mockWorkItem()'s id — every deterministic worktree/.agent path in this file keys on it. */
+const TEST_ITEM_ID = 42;
+
 const CLEAN_PLAN: PlanQuestions = { blocking: [], ambiguities: [] };
 const OPEN_PLAN: PlanQuestions = {
   blocking: [{ question: 'Which auth flow?' }],
@@ -145,6 +148,10 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
           }),
           'utf-8',
         );
+        // The real planner writes this too (pathsFor maps taskListPath here).
+        // Task 5's dispatch gates entry at 'implementing' on this file's
+        // presence, so a real planning run must leave it behind.
+        writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
       }
 
       if (isVerify) {
@@ -174,13 +181,53 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
   } as unknown as PipelineDeps;
 }
 
+/** The `.agent` directory `resolveEntryPhase`'s artifacts live under, for this harness. */
+function agentDirFor(itemId: number): string {
+  return join(root, 'worktrees', String(itemId), 'banking', '.agent');
+}
+
+/**
+ * Write to disk whichever artifact `resolveEntryPhase` requires to land at
+ * `phase` as requested, rather than silently falling back to an earlier one
+ * (see entry-phase.ts's `REQUIRES` table — each phase's own requirement,
+ * not the cumulative requirements of every phase before it). Spelled out
+ * phase by phase so a reader can tell exactly what a given test had on disk.
+ */
+function seedArtifactsFor(phase: JobRecord['phase'], itemId: number): void {
+  const agentDir = agentDirFor(itemId);
+
+  if (phase === 'implementing') {
+    const planDir = join(agentDir, 'plan');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
+  }
+
+  if (phase === 'verifying' || phase === 'publishing') {
+    const implementDir = join(agentDir, 'implement');
+    mkdirSync(implementDir, { recursive: true });
+    writeFileSync(
+      join(implementDir, 'summary.json'),
+      JSON.stringify({ summary: 'seeded for test' }),
+      'utf-8',
+    );
+  }
+
+  if (phase === 'publishing') {
+    const verifyDir = join(agentDir, 'verify');
+    mkdirSync(verifyDir, { recursive: true });
+    writeFileSync(join(verifyDir, 'result.json'), JSON.stringify(PASSING_VERIFY), 'utf-8');
+  }
+}
+
 /**
  * Seed the shared `store` with a job already at `phase` (plus any overrides —
- * Task 5 uses this to seed `failedAtPhase` and `lastSeenCommentId`) and run it
- * through `runJob`. Until Task 5 adds the dispatch that resolves an entry
- * phase, `runJob` still runs every phase from planning regardless of what is
- * seeded here — this is a seeding-and-invoking convenience, not yet a way to
- * skip phases.
+ * e.g. `failedAtPhase` and `lastSeenCommentId`), pre-write whichever
+ * artifacts that entry point needs so `resolveEntryPhase` actually lands
+ * there instead of falling back, and run it through `runJob`.
+ *
+ * `phase: 'failed'` resolves through `failedAtPhase` (falling back to
+ * 'planning', matching entry-phase.ts), since that is what the dispatch
+ * actually consults for a failed job.
  */
 function runProcessItemAtPhase(
   phase: JobRecord['phase'],
@@ -188,6 +235,8 @@ function runProcessItemAtPhase(
   jobOverrides: Partial<JobRecord> = {},
 ) {
   const item = mockWorkItem();
+  const targetPhase = phase === 'failed' ? jobOverrides.failedAtPhase ?? 'planning' : phase;
+  seedArtifactsFor(targetPhase, item.id);
   store.update(item.id, { phase, ...jobOverrides });
   return runJob(config(), item, store, deps);
 }
@@ -490,6 +539,75 @@ describe('runJob — failures', () => {
 
     expect(result.processed).toBe(false);
     expect(result.error).toContain('ADO is down');
+  });
+});
+
+describe('runJob — dispatch', () => {
+  /** `runAgent`'s `logFile` option, per call — the discriminator for which phase(s) ran. */
+  function logFiles(deps: PipelineDeps): string[] {
+    return (deps.runAgent as ReturnType<typeof mock>).mock.calls.map(
+      (c) => (c[2] as { logFile?: string } | undefined)?.logFile ?? '',
+    );
+  }
+
+  test('entering at verifying skips implement', async () => {
+    const deps = makeDeps();
+    await runProcessItemAtPhase('verifying', deps);
+    expect(logFiles(deps).some((f) => f.includes('implement'))).toBe(false);
+  });
+
+  test('entering at planning cleans the workspace first', async () => {
+    const deps = makeDeps();
+    // Simulate a job that already ran once and has a recorded worktree — a
+    // job that has never run has nothing on disk to clean (prepareWorkspaces
+    // hands it an empty worktree either way), so the guard only fires when
+    // an earlier run's worktree is actually on record. This is the scenario
+    // reset-item and a resumed 'awaiting-answers' job produce.
+    await runProcessItemAtPhase('new', deps, {
+      worktrees: {
+        banking: join(root, 'worktrees', String(TEST_ITEM_ID), 'banking'),
+        setupFiles: join(root, 'worktrees', String(TEST_ITEM_ID), 'setupFiles'),
+      },
+    });
+    // Once for the pre-dispatch wipe, once for the ordinary end-of-run
+    // cleanup — proving the wipe is a genuine extra call, not just the
+    // cleanup that already happens on every successful run.
+    expect((deps.removeAllWorktrees as ReturnType<typeof mock>).mock.calls).toHaveLength(2);
+  });
+
+  test('resuming forward does not clean the workspace', async () => {
+    const deps = makeDeps();
+    await runProcessItemAtPhase('implementing', deps);
+    // Only the success-path cleanup at the end, never before dispatch.
+    expect((deps.removeAllWorktrees as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+  });
+
+  test('a newer marked comment does not force a re-plan', async () => {
+    const deps = makeDeps();
+    deps.getWorkItemComments = mock(async () => [
+      { id: 10, text: 'human question' },
+      { id: 11, text: `${BOT_COMMENT_MARKER} our questions` },
+    ]);
+    // lastSeenCommentId is 10; the only newer comment is ours.
+    const result = await runProcessItemAtPhase('failed', deps, {
+      failedAtPhase: 'implementing',
+      lastSeenCommentId: 10,
+    });
+    expect(result.phase).toBe('done');
+    expect(logFiles(deps).some((f) => f.includes('plan-'))).toBe(false);
+  });
+
+  test('a newer unmarked comment does force a re-plan', async () => {
+    const deps = makeDeps();
+    deps.getWorkItemComments = mock(async () => [
+      { id: 10, text: 'human question' },
+      { id: 12, text: 'here are your answers' },
+    ]);
+    await runProcessItemAtPhase('failed', deps, {
+      failedAtPhase: 'implementing',
+      lastSeenCommentId: 10,
+    });
+    expect(logFiles(deps).some((f) => f.includes('plan-'))).toBe(true);
   });
 });
 
