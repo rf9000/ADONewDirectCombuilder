@@ -40,8 +40,41 @@ rather than the orchestrator, and is deliberately excluded here.
 A pure function replaces the unconditional planning call:
 
 ```
-resolveEntryPhase(job, available) → JobPhase
+resolveEntryPhase(job, available, hasNewComments) → JobPhase
 ```
+
+Two preconditions are evaluated before the table below, because both override it.
+
+**New human comments force a re-plan.** `runPlanningPhase` already writes
+`lastSeenCommentId` (`pipeline.ts:204`) and nothing reads it. If the newest comment ID
+exceeds it, the plan was made without that input, so entry is forced to `planning`
+whatever the recorded phase says. This makes "I read the failure, answered it, and
+re-triggered" produce the re-plan the human expects, while a bare re-trigger stays a true
+resume.
+
+This only works if the bot's own comments don't count. `reportFailure` and the questions
+comment both post *after* planning, so their IDs necessarily exceed `lastSeenCommentId` —
+left unhandled, every retry would see "new comments" and `failedAtPhase` would be dead
+code. `addWorkItemComment` returns the created `WorkItemComment` including its `id`, so
+the pipeline advances `lastSeenCommentId` to that value every time it posts. Only
+comments the pipeline did not write can then trigger a re-plan.
+
+**Entering at `planning` means a clean workspace.** Whenever resolution lands on
+`planning` — new job, `reset-item`, `awaiting-answers`, a fallback downgrade, or the
+comment rule above — the worktrees are removed before `prepareWorkspaces` recreates them.
+Resume forward reuses the directory; start over starts over. Partial implement work built
+against a superseded plan is discarded, which is the point.
+
+That rule also fixes a pre-existing bug independent of this design. `createWorktree`
+returns early when the worktree exists (`workspace.ts:183`), so `reset-item` clears the
+job record and leaves the directory. Observed on work item 80969: after a reset, the
+"fresh" planning run began in a worktree still holding the previous round's design doc,
+task list and questions file. Harmless there because the plan was regenerated anyway —
+not harmless once a retry can inherit half-built AL objects.
+
+Neither precondition creates a collision risk *between* work items: `worktreePath` and
+`branchNameFor` are both keyed on the item ID, and jobs are serialized. The hazard is
+always the same item's stale state.
 
 | Recorded phase | Enters at | Reason |
 |---|---|---|
@@ -166,6 +199,15 @@ Against the existing mocked `PipelineDeps`:
 - attachment functions are called on success with the design doc; a throw from either
   leaves the job `done`
 
+The two preconditions need their own tests, and the third of these is the one that would
+catch the mistake that makes the whole feature inert:
+
+- a newer human comment forces entry at `planning` even when the phase is `publishing`
+- entering at `planning` calls `removeAllWorktrees` first; entering at `implementing` does
+  not
+- a job whose only new comment is one the pipeline itself posted resumes at
+  `failedAtPhase` — it does **not** re-plan
+
 Existing tests assert today's behaviour — that failure removes worktrees — and will need
 inverting. That is the change being real, not an obstacle to route around.
 
@@ -173,7 +215,7 @@ inverting. That is the change being real, not an obstacle to route around.
 
 | File | Change |
 |---|---|
-| `src/services/pipeline.ts` | dispatch, `failedAtPhase`, drop failure-path worktree removal, attachment call, read `changeSummary` from artifact |
+| `src/services/pipeline.ts` | dispatch, the two preconditions, `failedAtPhase`, advance `lastSeenCommentId` on every posted comment, drop failure-path worktree removal, attachment call, read `changeSummary` from artifact |
 | `src/services/workspace.ts` | none — `createWorktree` is already idempotent (`:183`) |
 | `src/sdk/azure-devops-client.ts` | `uploadAttachment`, `linkAttachmentToWorkItem` |
 | `src/state/state-store.ts` | `failedAtPhase` on the job record |
