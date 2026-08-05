@@ -395,7 +395,7 @@ export async function runJob(
 
   if (config.dryRun) {
     const comments = await deps.getWorkItemComments(config, item.id);
-    const context = prompts.buildWorkItemContext(item, comments);
+    const context = prompts.buildWorkItemContext(item, comments, config);
     log(`  Item #${item.id}: [DRY RUN] read ${comments.length} comment(s)`);
     console.log(context);
     return { itemId: item.id, processed: true, phase: job.phase };
@@ -417,7 +417,7 @@ export async function runJob(
       worktrees,
       paths: pathsFor(worktrees.banking),
       comments,
-      workItemContext: prompts.buildWorkItemContext(item, comments),
+      workItemContext: prompts.buildWorkItemContext(item, comments, config),
     };
 
     // ---- plan, and loop back to the human while anything is unresolved ----

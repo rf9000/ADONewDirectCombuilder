@@ -34,6 +34,7 @@ export function field(item: WorkItemResponse, name: string): string {
 export function buildWorkItemContext(
   item: WorkItemResponse,
   comments: WorkItemComment[],
+  config?: AppConfig,
 ): string {
   const lines: string[] = [
     `# Work item #${item.id}`,
@@ -41,10 +42,29 @@ export function buildWorkItemContext(
     `**Title:** ${field(item, 'System.Title')}`,
     `**State:** ${field(item, 'System.State')}`,
     `**Tags:** ${field(item, 'System.Tags')}`,
+  ];
+
+  // Without this the planner investigates the trigger tag as if it were a
+  // product concern — it searched both repos and .claude/ for it, found only a
+  // prior run's own output, and reported "no automation meaning" as an
+  // ambiguity. The tags are ours; say so rather than let it spend a round
+  // reaching a wrong conclusion about them.
+  if (config) {
+    lines.push(
+      '',
+      '> The tags above include this orchestrator\'s own signalling: ' +
+        `\`${config.triggerTag}\` (start or resume), \`${config.waitingTag}\` (paused for your ` +
+        `questions), \`${config.doneTag}\`, \`${config.failedTag}\`. The pipeline that invoked you ` +
+        'sets and clears them. They mean nothing inside the product repositories — do not search ' +
+        'for them, and do not treat them as part of the requirement.',
+    );
+  }
+
+  lines.push(
     '',
     '## Description',
     htmlToText(field(item, 'System.Description')) || '(empty)',
-  ];
+  );
 
   const repro = htmlToText(field(item, 'Microsoft.VSTS.TCM.ReproSteps'));
   if (repro) {

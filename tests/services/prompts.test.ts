@@ -145,3 +145,22 @@ describe('escapeHtml', () => {
     );
   });
 });
+
+describe('buildWorkItemContext orchestration note', () => {
+  test('names the pipeline tags so the agent does not investigate them', () => {
+    const context = buildWorkItemContext(
+      mockWorkItem({ fields: { 'System.Tags': 'create-new-comm' } }),
+      [],
+      mockConfig(),
+    );
+
+    expect(context).toContain('create-new-comm');
+    expect(context).toContain('start or resume');
+    expect(context).toContain('mean nothing inside the product repositories');
+  });
+
+  test('omits the note when no config is supplied', () => {
+    const context = buildWorkItemContext(mockWorkItem(), []);
+    expect(context).not.toContain('mean nothing inside the product repositories');
+  });
+});
