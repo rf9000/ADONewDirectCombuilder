@@ -356,30 +356,48 @@ export function prTitle(item: WorkItemResponse): string {
   return title.length > 140 ? `${title.slice(0, 137)}...` : title;
 }
 
+/**
+ * ADO rejects a pull request description over this length with a 400. The
+ * agent's change summary is unbounded prose, so it has to be budgeted.
+ */
+const MAX_PR_DESCRIPTION = 4000;
+
 export function buildPrDescription(
   item: WorkItemResponse,
   changeSummary: string,
   verify: VerifyResult,
 ): string {
-  const lines = [changeSummary.trim(), '', '---', '', '**Verification**', ''];
+  // The verification block is load-bearing — a PR must never overstate what was
+  // tested — so it is built first and gets its length reserved. Only the change
+  // summary is truncated.
+  const footer: string[] = ['', '---', '', '**Verification**', ''];
 
-  lines.push(verify.passed ? `- ${verify.summary}` : `- NOT PASSING: ${verify.summary}`);
+  footer.push(verify.passed ? `- ${verify.summary}` : `- NOT PASSING: ${verify.summary}`);
   if (verify.failedTests && verify.failedTests.length > 0) {
-    lines.push(`- Failing tests: ${verify.failedTests.join(', ')}`);
+    footer.push(`- Failing tests: ${verify.failedTests.join(', ')}`);
   }
   if (verify.envUrl) {
-    lines.push(`- Test environment: ${verify.envUrl}`);
+    footer.push(`- Test environment: ${verify.envUrl}`);
   }
   if (verify.envId) {
-    lines.push(`- Environment id: \`${verify.envId}\``);
+    footer.push(`- Environment id: \`${verify.envId}\``);
   }
 
-  lines.push(
+  footer.push(
     '',
     `Planned and implemented automatically from work item #${item.id}. Opened as a draft for human review.`,
   );
 
-  return lines.join('\n');
+  const footerText = footer.join('\n');
+  const notice = `\n\n_Summary truncated to fit Azure DevOps' ${MAX_PR_DESCRIPTION}-character limit. The full account is on work item #${item.id}._`;
+
+  const summary = changeSummary.trim();
+  const budget = MAX_PR_DESCRIPTION - footerText.length;
+
+  if (summary.length <= budget) return `${summary}${footerText}`;
+
+  const kept = Math.max(0, budget - notice.length);
+  return `${summary.slice(0, kept).trimEnd()}${notice}${footerText}`;
 }
 
 // ---------------------------------------------------------------------------

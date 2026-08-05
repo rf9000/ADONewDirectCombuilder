@@ -501,6 +501,42 @@ describe('PR content', () => {
     expect(description).toContain('#42');
   });
 
+  test('a long summary is truncated to fit the ADO 4000-character limit', () => {
+    const description = buildPrDescription(
+      mockWorkItem(),
+      'x'.repeat(20000),
+      PASSING_VERIFY,
+    );
+
+    // ADO returns a 400 above 4000, which cost a $92 run to discover.
+    expect(description.length).toBeLessThanOrEqual(4000);
+    expect(description).toContain('truncated');
+  });
+
+  test('truncation never sacrifices the verification block', () => {
+    const description = buildPrDescription(mockWorkItem(), 'x'.repeat(20000), {
+      passed: false,
+      summary: 'compile error',
+      failedTests: ['TestA', 'TestB'],
+    });
+
+    // A PR must never look better-tested than it is, however long the summary.
+    expect(description.length).toBeLessThanOrEqual(4000);
+    expect(description).toContain('NOT PASSING');
+    expect(description).toContain('TestA, TestB');
+  });
+
+  test('a short summary is left exactly as it was', () => {
+    const description = buildPrDescription(
+      mockWorkItem(),
+      '- added Acme codeunits',
+      PASSING_VERIFY,
+    );
+
+    expect(description).not.toContain('truncated');
+    expect(description.startsWith('- added Acme codeunits')).toBe(true);
+  });
+
   test('a failing verification is called out plainly', () => {
     const description = buildPrDescription(mockWorkItem(), 'summary', {
       passed: false,
