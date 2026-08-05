@@ -106,13 +106,37 @@ describe('buildQuestionsComment', () => {
   test('tells the human how to resume the loop', () => {
     const comment = buildQuestionsComment(mockConfig(), questions, 1, false);
     expect(comment).toContain('create-new-comm');
-    expect(comment).toContain('re-add');
+    expect(comment).toContain('Re-add');
+  });
+
+  test('leads with the paused-state callout, before the questions', () => {
+    const comment = buildQuestionsComment(mockConfig(), questions, 1, false);
+
+    // The instruction is the only thing the human must act on, so it must not
+    // sit below a wall of rationale where it gets skimmed past.
+    expect(comment).toContain('paused and will not continue on its own');
+    expect(comment.indexOf('paused and will not continue')).toBeLessThan(
+      comment.indexOf('Which auth flow?'),
+    );
+    // Names the waiting tag so the current state is self-explanatory in ADO.
+    expect(comment).toContain('create-new-comm-waiting');
+    // And says when, so silence is distinguishable from a hung bot.
+    expect(comment).toContain('within 5 minutes');
+  });
+
+  test('repeats the call to action after the questions', () => {
+    const comment = buildQuestionsComment(mockConfig(), questions, 1, false);
+    expect(comment).toContain('Nothing happens until that tag is back');
+    expect(comment.indexOf('Nothing happens until that tag is back')).toBeGreaterThan(
+      comment.indexOf('Which auth flow?'),
+    );
   });
 
   test('says it will proceed on the final round', () => {
     const comment = buildQuestionsComment(mockConfig(), questions, 3, true);
-    expect(comment).toContain('round 3 of 3');
+    expect(comment).toContain('3 of 3');
     expect(comment).toContain('proceed on the decisions above');
+    expect(comment).toContain('I will not ask again');
   });
 
   test('omits a section that has no entries', () => {

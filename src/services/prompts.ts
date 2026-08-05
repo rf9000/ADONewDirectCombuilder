@@ -284,8 +284,27 @@ export function buildQuestionsComment(
   round: number,
   isFinalRound: boolean,
 ): string {
+  const trigger = `<code>${escapeHtml(config.triggerTag)}</code>`;
+  const waiting = `<code>${escapeHtml(config.waitingTag)}</code>`;
+
+  // The call to action goes first and is repeated at the end. Buried at the
+  // bottom under the rationale it was easy to miss, and a missed instruction
+  // means the job sits in awaiting-answers indefinitely — the tag is the only
+  // thing that resumes it, so silence looks identical to a hung bot.
   const lines: string[] = [
     `<b>Bank integration planner — round ${round}: input needed</b>`,
+    '',
+    '<b>This job is paused and will not continue on its own.</b>',
+    '<ol>',
+    '<li>Answer the questions below in a comment on this work item.</li>',
+    `<li><b>Re-add the ${trigger} tag.</b> I removed it so the poller would ` +
+      `stop; the item now carries ${waiting} instead.</li>`,
+    '</ol>',
+    `I pick it up on the next poll (within ${config.pollIntervalMinutes} minute` +
+      `${config.pollIntervalMinutes === 1 ? '' : 's'}) and continue from where I ` +
+      'stopped — the planning already done is not repeated.',
+    '',
+    '<hr/>',
     '',
   ];
 
@@ -310,19 +329,19 @@ export function buildQuestionsComment(
     lines.push('</ol>');
   }
 
-  lines.push('');
+  lines.push('', '<hr/>', '');
 
   if (isFinalRound) {
     lines.push(
-      `This was clarification round ${round} of ${config.maxClarifyRounds}. ` +
-        'I will proceed on the decisions above rather than keep asking. ' +
-        `Re-add the <code>${escapeHtml(config.triggerTag)}</code> tag to run again with your answers.`,
+      `<b>Last clarification round (${round} of ${config.maxClarifyRounds}).</b> ` +
+        'I will not ask again — on the next run I proceed on the decisions above, ' +
+        'answered or not. ' +
+        `<b>Re-add the ${trigger} tag</b> to run with whatever you have provided.`,
     );
   } else {
     lines.push(
-      'Answer in a comment on this work item, then re-add the ' +
-        `<code>${escapeHtml(config.triggerTag)}</code> tag. I will pick it up on the next poll ` +
-        'and continue from where I stopped.',
+      `<b>To continue: answer in a comment, then re-add the ${trigger} tag.</b> ` +
+        'Nothing happens until that tag is back on the work item.',
     );
   }
 
