@@ -59,3 +59,27 @@ another developer's in-flight reservation, and nothing detects that until build.
 emit the sentinel `0` in `objects[].id`, make every object-creating task depend on
 the reservation task, and raise it as a blocking question. A plan with invented
 IDs looks complete and is not.
+
+### A Ninja-issued ID is not automatically free — verify it against the tree
+
+Ninja tracks what *it* has issued, not what exists. IDs hand-assigned in a PR
+without going through Ninja stay invisible to it, so it will happily reissue them.
+
+Observed 2026-08-05: Ninja issued `97138` for an `export-test` codeunit, already
+occupied in-tree by `CTS-PE Pmt Sts Srch Conv UT`. Cause: PR 52349 added codeunits
+97138–97163 with hand-assigned IDs that were never registered. Writing the issued
+ID into a file would have produced a duplicate-ID build failure with a cause
+nowhere near the symptom.
+
+**After every reservation, grep the tree for that ID scoped to the object type**
+(`codeunit 97138`, `page 97138` — the same number is legal across types) before
+writing it into a file.
+
+**When an issued ID is occupied:** Ninja issues strictly `+1` and has no
+assign-specific-ID call, so walk it upward until you reach one genuinely free in
+the tree. **Keep the intermediate reservations rather than releasing them** — they
+are the ones already in use, and holding them makes Ninja's index match reality
+instead of leaving the same trap for the next developer. Report the repair in the
+plan: which IDs were absorbed, and that the team should re-sync Ninja's
+consumed-ID index for that app. The underlying defect is hand-assignment outside
+Ninja, not the reservation.
