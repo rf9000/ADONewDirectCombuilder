@@ -56,7 +56,10 @@ const envSchema = z.object({
   BANKING_REPO_ID: z.string().default(""),
   BANKING_DEFAULT_BRANCH: z.string().default("main"),
   BANKING_SEED_REPO: z.string().default(""),
-  SETUP_FILES_REPO_NAME: z.string().default("Continia Banking Setup Files"),
+  // Exact ADO repo name — it builds the clone URL, and a wrong one fails only at
+  // clone time with TF401019. The GUID lookups still succeed, so a name typo
+  // survives every config and API check. Note the hyphen.
+  SETUP_FILES_REPO_NAME: z.string().default("Continia Banking - Setup Files"),
   SETUP_FILES_REPO_ID: z.string().default(""),
   SETUP_FILES_DEFAULT_BRANCH: z.string().default("main"),
   SETUP_FILES_SEED_REPO: z.string().default(""),

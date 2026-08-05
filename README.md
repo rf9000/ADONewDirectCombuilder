@@ -47,10 +47,15 @@ it. The two repo GUIDs are checked when the repo cache is first built — `statu
 Every tag, repo id, model, interval and path is configurable — see `.env.example`.
 
 On a host that already has the product repos checked out, set `BANKING_SEED_REPO` and
-`SETUP_FILES_SEED_REPO` to those paths. The first bare clone then borrows objects locally
-(`git clone --reference … --dissociate`) instead of pulling gigabytes from Azure DevOps. Objects
-are copied and the alternate dropped, so the cache survives the seed disappearing; a path that
-isn't a git repo is warned about and ignored rather than fatal.
+`SETUP_FILES_SEED_REPO` to those paths — **container-side** paths, matching the right-hand side
+of the bind mounts below, not the host directory names. The first bare clone then borrows objects
+locally (`git clone --reference … --dissociate`) instead of fetching them from Azure DevOps.
+Objects are copied and the alternate dropped, so the cache survives the seed disappearing; a path
+that isn't a git repo is warned about and ignored rather than fatal.
+
+The saving is modest in absolute terms — Continia Banking's pack is ~217 MiB and setup-files
+~72 MiB, not the gigabytes an earlier version of this note claimed — so treat the seed as a
+convenience rather than a prerequisite.
 
 ## Running on the Linux VM
 
@@ -77,20 +82,30 @@ Azure DevOps bots. It has no compose file of its own — add this service to the
       LOG_DIR: /data/logs
       SKILLS_SOURCE_DIR: /app/.claude
       CONTINIA_CLI_PATH: /usr/local/bin/continia
-      CONTINIA_ALC_CACHE: /data/alc-cache
-      CONTINIA_AUTO_INSTALL_ALC: "1"
+      # Auto-install is off and the compiler comes from the mount below — the CLI
+      # resolves a downloaded compiler at lib/net10.0/alc while the package ships
+      # lib/net8.0/alc. See docs/known-issues.md.
+      CONTINIA_ALC_PATH: /opt/al/bin/linux/alc
+      CONTINIA_AUTO_INSTALL_ALC: "0"
     volumes:
       - new-comm-builder-data:/data
-      # Seeds the first bare clone so a multi-gigabyte fetch becomes a local
-      # object copy. Read-only is enough: this bot symlinks skills into its own
-      # worktrees, never into the source repos, and pushes to ADO over HTTPS.
+      # Seeds the first bare clone so the fetch becomes a local object copy.
+      # Read-only is enough: this bot symlinks skills into its own worktrees,
+      # never into the source repos, and pushes to ADO over HTTPS.
       - /home/azureuser/repos/continia-banking:/repos/continia-banking:ro
-      - /home/azureuser/repos/continia-banking-setup-files:/repos/continia-banking-setup-files:ro
-    # Cloning Continia Banking and compiling AL are both memory-hungry.
+      - /home/azureuser/repos/setup-files:/repos/setup-files:ro
+      # The AL compiler. Self-contained .NET, so no dotnet runtime is needed in
+      # the image — but it does need the libicu installed by the Dockerfile.
+      # Same mount create-scripts-for-videos uses.
+      - /home/azureuser/tools/al/al-ext/extension/bin:/opt/al/bin:ro
+    # Measured peak for the largest app (base-application, 1040 files) is
+    # 0.57 GiB through to .app packaging, in 14s. 2G is ~3.5x that, and staying
+    # under host RAM means an overrun is contained here rather than letting the
+    # kernel pick a victim among the other services. See docs/vm-bringup.md §23.
     deploy:
       resources:
         limits:
-          memory: 8G
+          memory: 2G
     healthcheck:
       test: ["CMD", "bun", "run", "src/cli/index.ts", "status"]
       interval: 5m
@@ -110,19 +125,26 @@ Plus `new-comm-builder-data:` in the top-level `volumes:` block. Then from `~/te
 docker compose build new-comm-builder
 docker compose run --rm new-comm-builder bun run src/cli/index.ts status   # config check
 docker compose run --rm new-comm-builder continia env list --json          # CLI auth check
+docker compose run --rm --entrypoint sh new-comm-builder \
+  -c '/opt/al/bin/linux/alc /? | head -2'                                  # AL compiler check
 docker compose up -d new-comm-builder
 docker compose logs -f new-comm-builder
 ```
+
+That third check matters more than it looks: the verify phase is the only thing that compiles AL,
+so a compiler that can't start fails every job after a full plan and implement have already run.
+See [docs/known-issues.md](docs/known-issues.md) for why auto-install is off and the compiler is
+mounted, and [docs/vm-bringup.md](docs/vm-bringup.md) for the full 72-step deployment runbook.
 
 Unlike the other services in the stack, this one does **not** mount the host's `~/.claude`.
 It carries its own `ANTHROPIC_API_KEY` in `.env.new-comm-builder` so spend and rate limits stay
 attributable per bot, and its skills are baked into the image rather than shared — the pipeline's
 invariants depend on specific skill behaviour, so they are version-pinned with the code.
 
-State, repo mirrors, worktrees, logs and the AL compiler cache all live in the
-`new-comm-builder-data` volume, so restarts and image rebuilds resume rather than restart. It is
-one large volume rather than the fleet's usual small `/app/.state` because this bot caches bare
-clones and the AL compiler.
+State, repo mirrors, worktrees and logs all live in the `new-comm-builder-data` volume, so
+restarts and image rebuilds resume rather than restart. It is one large volume rather than the
+fleet's usual small `/app/.state` because this bot caches bare clones. The AL compiler is not in
+it — that comes from the read-only `/opt/al/bin` mount.
 
 **The build context must contain `.tools/continia-linux`** (the ELF build of the Continia CLI) —
 the Dockerfile copies it to `/usr/local/bin/continia`, so the build fails outright without it.

@@ -87,16 +87,20 @@ chmod +x ~/teams/continia-banking/ADONewDirectCombuilder/.tools/continia-linux
 
 ### 8. [VM] Verify the binary actually runs on this host
 
-The single highest-value early check: it's a dynamically linked Node SEA build and has never
-run on Linux in this project.
+The single highest-value early check: a Node SEA build that has never run on Linux in this
+project.
 
 ```bash
 ~/teams/continia-banking/ADONewDirectCombuilder/.tools/continia-linux --version
 ```
 - [ ] Prints a version, **not** a linker error
 
-If this fails with a missing `.so`, the container may still work — it installs `libicu72`,
-`libssl3` and `libstdc++6`. Note the failure and re-check at step 30.
+`command not found` on a bare `continia-linux` just means `.` isn't on `PATH` — use `./` or the
+absolute path above. `Permission denied` means step 7 didn't take.
+
+The binary is statically linked (`ldd` shows no ICU, OpenSSL or libstdc++), so a missing `.so`
+here would be surprising. The `libicu`/`libssl3`/`libstdc++6` packages in the Dockerfile are for
+the AL compiler, not for this.
 
 ### 9. [WIN] Copy `.mcp.json` (optional)
 
@@ -111,7 +115,8 @@ scp .mcp.json "${vm}:${dst}/"
 
 ### 10. [VM] Confirm the banking repo is on the host
 
-This is the clone seed — it turns a multi-GB ADO fetch into a local object copy.
+This is the clone seed — it turns the ADO object fetch into a local copy (~217 MiB for Banking,
+so a convenience rather than a prerequisite).
 
 ```bash
 ls -d ~/repos/continia-banking && git -C ~/repos/continia-banking rev-parse --is-inside-work-tree
@@ -166,12 +171,12 @@ CONTINIA_API_TOKEN=<demoportal token>
 # --- Repositories ---
 BANKING_REPO_NAME=Continia Banking
 BANKING_REPO_ID=a838fce3-3b9c-4c78-beec-cb4cf5983144
-SETUP_FILES_REPO_NAME=Continia Banking Setup Files
+SETUP_FILES_REPO_NAME=Continia Banking - Setup Files
 SETUP_FILES_REPO_ID=0507b34a-7d81-4cfa-affb-f8081de4765e
 
-# --- Clone seeds: the read-only mounts from step 20 ---
+# --- Clone seeds: container-side paths, matching the mounts from step 20 ---
 BANKING_SEED_REPO=/repos/continia-banking
-SETUP_FILES_SEED_REPO=/repos/continia-banking-setup-files
+SETUP_FILES_SEED_REPO=/repos/setup-files
 
 # --- Only if you copied .mcp.json (step 9) ---
 # ADO_MCP_PAT_B64=<base64 of "you@continia.com:<pat>">
@@ -225,13 +230,19 @@ $EDITOR docker-compose.yml
 
 Copy the `new-comm-builder:` block from
 [README](../README.md#running-on-the-linux-vm) into `services:`, and add
-`new-comm-builder-data:` to the top-level `volumes:`. Adjust the two bind-mount paths to the
-real ones from steps 10–11.
+`new-comm-builder-data:` to the top-level `volumes:`. Adjust the two repo bind-mount host paths
+to the real ones from steps 10–11.
+
+Change only the **left** side of `host:container:ro`. `BANKING_SEED_REPO` and
+`SETUP_FILES_SEED_REPO` in the env file are container-side paths and must keep matching the
+right-hand side. Where the stack already mounts a repo under a given container-side name (e.g.
+`investigate-work-items` uses `/repos/setup-files`), reuse that name.
 
 - [ ] Service block added under `services:`
 - [ ] `new-comm-builder-data:` added under `volumes:`
-- [ ] Bind-mount host paths match steps 10–11
-- [ ] Both mounts end in `:ro`
+- [ ] Repo bind-mount host paths match steps 10–11
+- [ ] AL compiler mount present: `/home/azureuser/tools/al/al-ext/extension/bin:/opt/al/bin:ro`
+- [ ] All three bind mounts end in `:ro`; only the `new-comm-builder-data:/data` volume is writable
 
 ---
 
@@ -255,21 +266,43 @@ docker compose config new-comm-builder | grep -E 'REPO_CACHE|STATE_DIR|SKILLS_SO
 
 ### 23. [VM] Check RAM headroom
 
-The 8G limit sits alongside six long-running watchers.
+The container limit is `2G`, against a **measured** peak of 0.57 GiB — see
+[the spike below](#appendix--measuring-the-real-alc-peak). Local memory is dominated by one
+scoped `alc` invocation; tests execute remotely on the BC environment, so they cost waiting,
+not RAM.
 
 ```bash
 free -h && docker stats --no-stream --format '{{.Name}} {{.MemUsage}}'
+cat /proc/pressure/memory
 ```
-- [ ] Enough free memory for an 8G peak
+- [ ] At least ~1.5 GiB in `available`
+- [ ] `avg10`/`avg60` are 0.00 — the host is not already contending
+
+A `Standard_B2als_v2` (2 vCPU, 4 GiB) carries this alongside six other watchers. If the limit is
+ever raised above physical RAM it stops binding, and an overrun becomes the kernel's choice of
+victim rather than this container's problem — keep it under host RAM.
+
+Optional but cheap on a swapless host: `SwapTotal: 0` means `CommitLimit` is only 50% of RAM.
+Under the default `vm.overcommit_memory=0` that's advisory, but a small swapfile removes the
+question and gives a spill target.
+
+```bash
+sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
 
 ### 24. [VM] Check disk headroom
 
-Budget ~10 GB for repo mirrors + worktrees + AL compiler cache.
+Budget ~5 GB: the two mirrors are ~290 MiB of packed objects and `--dissociate` copies them, so
+count them twice; the rest is worktree checkouts, the image, and BC symbol packages.
 
 ```bash
-df -h /var/lib/docker
+df -h / /var/lib/docker
+du -sh ~/repos/continia-banking/.git ~/repos/setup-files/.git
 ```
-- [ ] At least 10 GB free
+- [ ] At least 5 GB free, plus room for a swapfile if step 23 added one
+- [ ] `/` and `/var/lib/docker` may be the same filesystem — if so, everything above shares it
 
 ### 25. [VM] Build the image
 
@@ -286,6 +319,19 @@ If it fails at the `COPY .tools/continia-linux` line, redo steps 5–7.
 docker images | grep -i comm-builder
 ```
 - [ ] Image listed
+
+Then prove the AL compiler resolves **inside** the container, before anything long-running
+depends on it:
+
+```bash
+docker compose run --rm --entrypoint sh new-comm-builder -c \
+  '/opt/al/bin/linux/alc /? 2>&1 | head -3'
+```
+- [ ] Prints `Microsoft (R) AL Compiler version …`
+
+A "Couldn't find a valid ICU package" error means the Dockerfile's `libicu` install didn't
+resolve; a "No such file" means the `/opt/al/bin` mount from step 20 is missing. Either way this
+fails in two seconds instead of forty minutes into a verify phase.
 
 ---
 
@@ -310,6 +356,19 @@ $S status
 
 A missing `ANTHROPIC_API_KEY` or `CONTINIA_API_TOKEN` fails here naming the variable, rather
 than surviving to burn a planning run.
+
+Then confirm the two repo **names** are exact. They build the clone URLs, and everything up to
+this point resolves repos by GUID instead — so a name typo passes `status`, passes the integration
+tests, and fails only at step 41 with `TF401019`:
+
+```bash
+docker compose run --rm new-comm-builder sh -c \
+  'curl -s -u :$AZURE_DEVOPS_PAT \
+    "https://dev.azure.com/$AZURE_DEVOPS_ORG/_apis/git/repositories?api-version=7.1" \
+   | grep -o "\"name\":\"[^\"]*Banking[^\"]*\""'
+```
+- [ ] `Continia Banking` appears exactly as configured
+- [ ] `Continia Banking - Setup Files` appears exactly as configured — note the hyphen
 
 ### 29. [VM] Confirm container paths and mounts
 
@@ -756,3 +815,62 @@ docker volume rm continia-banking_new-comm-builder-data
 | H | 53–61 | Implement → push → draft PRs → done tag → cleanup | [ ] |
 | I | 62–68 | Real BC verify; artifact matches the PR's claim | [ ] |
 | J | 69–72 | Restart behaviour, timeout orphan, BC contention | [ ] |
+
+---
+
+## Appendix — measuring the real `alc` peak
+
+The `2G` container limit in step 23 is measured, not guessed. Re-run this when the codebase grows
+enough that the number might have moved, or when a new app becomes the largest.
+
+The measurement is one scoped `continia compile` of the largest app, run under a systemd scope so
+an overrun kills only the spike rather than a sibling watcher on the shared host.
+
+```bash
+export CLI=~/teams/continia-banking/ADONewDirectCombuilder/.tools/continia-linux
+export ALC=~/tools/al/al-ext/extension/bin/linux/alc
+export CONTINIA_API_TOKEN=$(grep '^CONTINIA_API_TOKEN=' ~/teams/continia-banking/.env.new-comm-builder | cut -d= -f2-)
+
+# 1. Pick the worst case
+du -sh ~/repos/continia-banking/*/ | sort -h | tail -5
+export APP=base-application
+
+# 2. Symbols need a running environment; compiling without them measures a failure
+$CLI env list --json | grep -B2 Running
+export ENVID=<a running env id>
+
+# 3. Work on a copy — the source repo is bind-mounted into other services
+rm -rf /tmp/spike-$APP && cp -r ~/repos/continia-banking/$APP /tmp/spike-$APP
+$CLI deps download $ENVID /tmp/spike-$APP --json | tail -3
+ls /tmp/spike-$APP/.alpackages | wc -l    # must be non-zero
+
+# 4. Measure
+sudo systemd-run --scope -p MemoryMax=3G -p MemorySwapMax=4G \
+  --uid=$(id -u) --gid=$(id -g) \
+  --setenv=HOME=$HOME \
+  --setenv=CONTINIA_ALC_PATH=$ALC \
+  --setenv=CONTINIA_AUTO_INSTALL_ALC=0 \
+  --setenv=CONTINIA_API_TOKEN="$CONTINIA_API_TOKEN" \
+  /usr/bin/time -v $CLI compile /tmp/spike-$APP --json 2>&1 | tee /tmp/spike.log
+
+grep -oE '"success": *[a-z]+|"errorCount": *[0-9]+' /tmp/spike.log
+awk '/Maximum resident/{printf "peak = %.2f GiB\n", $NF/1048576}' /tmp/spike.log
+```
+
+`sudo` starts a clean environment, so the `--setenv` flags are load-bearing — without them the
+run silently loses `CONTINIA_ALC_PATH` and falls back to the broken auto-install path.
+
+Only trust a run reporting `"success": true` with `"errorCount": 0`. A failed compile stops before
+code emission and packaging and under-reports the peak; a missing `.alpackages` under-reports it
+by an order of magnitude.
+
+### Baseline, 2026-08-05
+
+| | |
+|---|---|
+| App | `base-application`, 1040 files, 33 MB of source |
+| Compiler | AL 18.0.35.20, mounted from the host AL extension |
+| Peak RSS | **0.57 GiB** |
+| Wall clock | 14.2 s at 143% CPU |
+| Swap used | 0 |
+| Host | `Standard_B2als_v2`, 2 vCPU / 4 GiB, six other watchers running |
