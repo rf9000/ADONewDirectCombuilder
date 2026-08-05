@@ -187,4 +187,14 @@ describe('StateStore', () => {
     expect(job?.lastSeenCommentId).toBe(15);
     expect(job?.worktrees.banking).toBe('/data/worktrees/7/banking');
   });
+
+  test('persists failedAtPhase across a reload', () => {
+    const store = new StateStore(dir);
+    store.ensure(42);
+    store.update(42, { phase: 'failed', failedAtPhase: 'implementing' });
+    store.save();
+
+    const reloaded = new StateStore(dir);
+    expect(reloaded.get(42)?.failedAtPhase).toBe('implementing');
+  });
 });

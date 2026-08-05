@@ -144,6 +144,11 @@ export interface JobRecord {
   designDocPath?: string;
   /** Last error message, when phase is 'failed'. */
   error?: string;
+  /**
+   * Phase that threw, when phase is 'failed'. A retry resumes here instead of
+   * re-planning from scratch.
+   */
+  failedAtPhase?: JobPhase;
   updatedAt: string;
 }
 
