@@ -51,6 +51,22 @@ payment methods) — not just AL objects. Each planner reports these in its frag
 section. Authoring those JSON files lives in the sibling setup-files repo and is downstream of
 this plan — but the plan must name them so nothing is silently missed.
 
+### `"Communication Type"` is an enum value name — state it explicitly
+
+When `SETUP_DATA_REQUIRED` names the `CTS-CB Bank System` header row, the
+`"Communication Type"` value must be the **`CommunicationType.Enum.al` value name**, not the
+bank code and not the bank system code. Spell it out in the plan, character-for-character, and
+say which it is — a builder who infers it from the bank code introduces a bug that does not
+error.
+
+An unresolvable value resolves to ordinal `0` (`Manual`): the bank system imports cleanly and
+then routes every file through `CTS-CB Manual Import`, with nothing logged anywhere. ABN AMRO
+hides this from anyone copying it, because `value(9; ABNAMRO)` happens to equal its bank code.
+
+The same value name is also required in `Files/Bank/{CODE}.json` under
+`CTS-CB Bank System Mapping2` → `"Supported Communication"`. Both must match exactly, so lock
+the spelling once in the design doc rather than leaving each file to be filled in separately.
+
 ## How to find the reference bank's real config
 
 Don't assume — look it up. For the reference bank, read its setup-JSON entries (use

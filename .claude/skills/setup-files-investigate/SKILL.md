@@ -33,6 +33,8 @@ Investigate questions about the JSON configuration files that drive the Continia
 - "Why can't I use payment method X with bank Y?"
 - "What validation rules apply to the Amount field?"
 - "Why did my manually changed field get overwritten after setup import?"
+- "The bank system imported fine but files route to manual import / direct import does nothing"
+  (start at the `"Communication Type"` trap below — it fails silently)
 
 ### Discovery / browsing
 - "What banks are available in Germany?"
@@ -167,6 +169,52 @@ Top-level keys: `"CTS-CB Bank"`, `"CTS-CB Bank System Mapping2"`, `"CTS-CB Bulk 
 
 ### Bank System Files (`Files/Bank System/{code}.json`)
 Top-level keys: `"Payment Method"`, `"CTS-CB Bank System"`, `"CTS-CB Bank System Pmt. Mth."`, `"CTS-CB Field Validation"`, `"CTS-CB Validation Set"`
+
+## Silent-Failure Trap: `"Communication Type"` is an enum value NAME
+
+**Check this first when a bank system imports without error but behaves as if it
+has no communication type** — files land in the wrong place, direct import does
+nothing, or everything routes through manual handling.
+
+In the `"CTS-CB Bank System"` header row, `"Communication Type"` must be a value
+**name** from `CommunicationType.Enum.al` — **not** the bank code, and not the
+bank system code.
+
+```jsonc
+// Files/Bank System/ACMEBANKISO20022.json
+"CTS-CB Bank System": [
+  { "Code": "ACMEBANKISO20022", "Communication Type": "AcmeBank" }  // enum value name
+  //                                                  ^ NOT "ACMEBANK" (bank code)
+]
+```
+
+**Why it is dangerous rather than merely wrong:** an unresolvable value does not
+error. It resolves to ordinal `0` — `Manual` — so the bank system imports
+cleanly and then routes every file through `CTS-CB Manual Import`. Nothing in the
+import log, nothing in the JSON validation, and nothing in the AL layer flags it.
+The symptom appears far from the cause.
+
+**Why nobody noticed:** ABN AMRO is `value(9; ABNAMRO)` in the enum and its bank
+code is also `ABNAMRO`, so the most-copied reference bank works either way.
+Copying its shape while substituting a bank code whose spelling differs from its
+enum value name reproduces the bug.
+
+**The same enum value name appears in a second file**, and must match
+character-for-character in both:
+
+| File | Array | Field |
+|---|---|---|
+| `Files/Bank System/{code}.json` | `CTS-CB Bank System` | `"Communication Type"` |
+| `Files/Bank/{CODE}.json` | `CTS-CB Bank System Mapping2` | `"Supported Communication"` |
+
+**To verify a value is real** rather than assuming:
+
+```bash
+grep -n 'value(' <banking>/base-application/**/CommunicationType.Enum.al
+```
+
+Compare the value name — case and all — against both JSON fields above. Do not
+infer the spelling from the bank code, the bank system code, or the folder name.
 
 ### Root-Level Files
 - `GeneralData.json`: `"CTS-CB File Architecture"` (self-referential bootstrap)
