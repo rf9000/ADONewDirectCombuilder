@@ -62,7 +62,7 @@ consumed only by `Conversion/Codeunits/FileConversion.Codeunit.al`.
 |---|---|---|
 | **E — Default (pass-through)** | the URL segment **equals** the bank-system value (the value the comm-type already carries) | `Default ComTypeUrlValue` (returns `BankSystemCode`) |
 | **A — Fixed bank token, no branch** | the URL segment is a fixed identifier that **differs** from the bank-system value, same for every call | `Yapily` → `'YAPILY'`; `BANKSapi` → `'banksapi'` |
-| **B — Fixed token + `BankSystemCode` override** | fixed token for most calls, but Direct Debit / PSP calls route by the bank-system value instead | `ABNAmro` → `'ABNAMROISO20022'`, returns `BankSystemCode` for Direct Debit/PSP; `Rabobank` → `'RABOBANK20022'`, same override |
+| **B — Fixed token + `BankSystemCode` override** | fixed token for most calls, but Direct Debit / PSP calls route by the bank-system value instead | `Rabobank` → `'RABOBANK20022'`, returns `BankSystemCode` for Direct Debit/PSP. **Not ABN AMRO** — see below |
 | **C — Dynamic enum-name token** | multiple banks share one platform and the URL segment is the comm-type **name**; specific transaction types still route by `BankSystemCode` | `Konfipay` (reads `BankSystem."Communication Type".Names`, overrides 5 transaction types to `BankSystemCode`) |
 | **D — Dual-endpoint routing** | the bank exposes two protocols/endpoints and routing depends on Conversion + FileType + TransactionType | `BANKSapiEBICS` (`'banksapi'` for PSD2/custom-format/status flows, `BankSystemCode` for EBICS) |
 
@@ -70,9 +70,20 @@ consumed only by `Conversion/Codeunits/FileConversion.Codeunit.al`.
 fixed bank identifier → **A**, adding the `BankSystemCode` override for the overloads whose calls
 differ (DD/PSP/conversion) → **B**. Platform-shared name → **C**. Two endpoints → **D**.
 
-Reference: `base-application/Bank Communication/Codeunits/ABNAmroComTypeUrlValue.Codeunit.al`
-(B), `RabobankComTypeUrlValue` (B), `YapilyComTypeUrlValue` (A), `KonfipayComTypeUrlValue` (C),
-`BANKSapiEBICSUrlValue` (D), `DefaultComTypeUrlValue` (E).
+**Before classifying as A or B, compare the token to the bank-system code.** If they are
+equal, every overload returns what `DefaultComTypeUrlValue` already returns and the object is
+a needless-object defect — the existence of a per-bank implementation in the repo is not
+evidence that one is needed.
+
+`ABNAmroComTypeUrlValue.Codeunit.al:31` defines `ABNAMROTok = 'ABNAMROISO20022'`, byte-identical
+to ABN AMRO's sole bank-system code — so despite appearing in the repo as a category-B
+implementation, it is functionally **E**, including on the Direct-Debit/PSP branch. Copying it
+for a new bank whose route segment also equals its bank-system code adds an object that does
+nothing. Verified 2026-08-05.
+
+Reference: `RabobankComTypeUrlValue` (B), `YapilyComTypeUrlValue` (A), `KonfipayComTypeUrlValue`
+(C), `BANKSapiEBICSUrlValue` (D), `DefaultComTypeUrlValue` (E),
+`ABNAmroComTypeUrlValue` (looks like B, behaves as E).
 
 This value feeds **every** endpoint (auth, export, import), so the auth planner owns the object
 but export/import must use the same chosen value when planning their URL keys.

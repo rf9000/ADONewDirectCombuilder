@@ -43,4 +43,19 @@ Use this to sanity-check that the planners proposed a complete set (≈8–12 ob
   - `CTS-CB <Name>ClnUpBnkAccData` — `ICleanUpBankAccData` **required when** onboarding writes `Bank`/`Bank Account` table fields (clear exactly those); else the no-op default.
 - Optional: `IBankAccountAtThirdParty`, `IMatch Custom Status`.
 
-Object ID range for base-application: `71553575–71553874` (primary) and `72282325–72282424` (extended). Each bank consumes ~8–12 IDs.
+Object IDs for base-application: each bank consumes ~8–12.
+
+**Do not take a range from this document — measure first.** Ranges are shared team
+state and fill up; a range named here was accurate when written and will not stay
+that way. Measured 2026-08-05: `71553575–71553874` had **1** free ID left and
+`72282325–72282424` had **8** — both effectively exhausted, and both were still
+listed here as "primary" and "extended". `72918625–72918824` had 157 free.
+
+Check occupancy against the current tree before choosing, and reserve through the
+AL Object ID Ninja MCP rather than picking by hand — a fabricated ID collides with
+another developer's in-flight reservation, and nothing detects that until build.
+
+**Never invent an ID to keep planning moving.** If reservation is unavailable,
+emit the sentinel `0` in `objects[].id`, make every object-creating task depend on
+the reservation task, and raise it as a blocking question. A plan with invented
+IDs looks complete and is not.

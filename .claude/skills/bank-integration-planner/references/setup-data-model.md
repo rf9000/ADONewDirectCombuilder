@@ -24,8 +24,8 @@ From `setup-files-investigate` (resolve the repo path via `.claude/repo-paths.js
 | What you're planning | File category | Path |
 |----------------------|---------------|------|
 | Default import + export **format** for the bank | Bank | `Files/Bank/{BankCode}.json` |
-| **Allowed file types** the bank system accepts for **export** | Bank System - Export | `Files/Bank System - Export/{BankSystemCode}.json` |
-| **Allowed file types** the bank system accepts for **import** | Bank System - Import | `Files/Bank System - Import/{BankSystemCode}.json` |
+| **Allowed file types** (both directions) | Bank System | `Files/Bank System/{BankSystemCode}.json` → `CTS-CB Bank System Com. Setup` |
+| Per-direction placeholder files — **not** where file types live | Bank System - Export / Import | `Files/Bank System - {Export,Import}/{BankSystemCode}.json` |
 | Payment methods, field validations, validation sets | Bank System | `Files/Bank System/{BankSystemCode}.json` |
 | ISO bank transaction codes | Import Setup | `Files/ImportSetup.json` |
 | Bank closing days (holidays) | Export Setup | `Files/ExportSetup.json` |
@@ -37,10 +37,18 @@ From `setup-files-investigate` (resolve the repo path via `.claude/repo-paths.js
 
 **Worked example (the mistake this doc exists to prevent):** "the bank accepts PAIN.001 for
 export and CAMT.053 for import." Those **allowed file-type values are setup-JSON config**
-(`Bank System - Export/{code}.json` and `Bank System - Import/{code}.json`), looked up at
+(`Files/Bank System/{code}.json`, under `CTS-CB Bank System Com. Setup`), looked up at
 runtime — not an enum, not a codeunit branch, not a `Bank` table field. The export/import
 codeunits *read* the configured file type; they don't *define* it. Planning a per-bank object
 to "select the file type" is a `needless-object` defect.
+
+**The per-direction folders are placeholders, despite their names.** An earlier version of this
+doc sent planners to `Files/Bank System - Export|Import/{code}.json` for file types; they are not
+there. Verified 2026-08-05: `Files/Bank System - Export/ABNAMROISO20022.json` is literally `{}`
+(2 bytes) and its Import counterpart is 119 bytes of empty description-template arrays, while ABN
+AMRO's real file types sit in `Files/Bank System/ABNAMROISO20022.json`. All three folders carry
+the same 90 filenames and every export placeholder is ≤ 4 bytes — so **still create the
+placeholders for folder parity**, just don't put file types in them.
 
 ## A new bank needs new setup-JSON entries too
 

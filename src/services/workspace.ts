@@ -355,6 +355,27 @@ function resolveGitCommonDir(worktree: string): string | undefined {
   return resolve(gitDir, commonDir);
 }
 
+/**
+ * Persist the agent's git identity into the worktree's repo config.
+ *
+ * `commitAndPush` passes the identity per-invocation with `-c`, which is enough
+ * for our own commits but invisible to anything else that shells out to git.
+ * The AL Object ID Ninja MCP reads `git config user.email` to attribute a
+ * reservation and returns HTTP 403 GIT_EMAIL_REQUIRED without one — which
+ * blocks the plan at object-ID reservation, after all the planning is done.
+ *
+ * Writing it here rather than baking it into the image keeps COMMIT_AUTHOR the
+ * single source of truth.
+ */
+export async function setGitIdentity(
+  config: AppConfig,
+  worktree: string,
+  author: { name: string; email: string },
+): Promise<void> {
+  await git(config, ['config', 'user.name', author.name], { cwd: worktree });
+  await git(config, ['config', 'user.email', author.email], { cwd: worktree });
+}
+
 export async function hasChanges(config: AppConfig, worktree: string): Promise<boolean> {
   const result = await git(config, ['status', '--porcelain'], { cwd: worktree });
   return result.stdout.trim() !== '';

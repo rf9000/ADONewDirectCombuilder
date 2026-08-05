@@ -36,6 +36,7 @@ export interface PipelineDeps {
   removeAllWorktrees: typeof ws.removeAllWorktrees;
   wireSkills: typeof ws.wireSkills;
   addGitExcludes: typeof ws.addGitExcludes;
+  setGitIdentity: typeof ws.setGitIdentity;
   commitAndPush: typeof ws.commitAndPush;
   hasChanges: typeof ws.hasChanges;
   runAgent: typeof runner.runAgent;
@@ -52,6 +53,7 @@ export const defaultDeps: PipelineDeps = {
   removeAllWorktrees: ws.removeAllWorktrees,
   wireSkills: ws.wireSkills,
   addGitExcludes: ws.addGitExcludes,
+  setGitIdentity: ws.setGitIdentity,
   commitAndPush: ws.commitAndPush,
   hasChanges: ws.hasChanges,
   runAgent: runner.runAgent,
@@ -130,6 +132,9 @@ async function prepareWorkspaces(
   deps.wireSkills(config, setupFiles, repoPaths);
   deps.addGitExcludes(banking, [`/${AGENT_DIR}/`]);
   deps.addGitExcludes(setupFiles, [`/${AGENT_DIR}/`]);
+  // Tools the agent shells out to read this from config, not from our -c args.
+  await deps.setGitIdentity(config, banking, COMMIT_AUTHOR);
+  await deps.setGitIdentity(config, setupFiles, COMMIT_AUTHOR);
 
   mkdirSync(join(banking, AGENT_DIR, 'plan'), { recursive: true });
   mkdirSync(join(banking, AGENT_DIR, 'verify'), { recursive: true });

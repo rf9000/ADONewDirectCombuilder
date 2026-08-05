@@ -95,6 +95,7 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
     removeAllWorktrees: mock(() => Promise.resolve()),
     wireSkills: mock(() => undefined),
     addGitExcludes: mock(() => undefined),
+    setGitIdentity: mock(async () => undefined),
     commitAndPush: mock((_cfg, worktree) =>
       Promise.resolve([...changed].some((key) => worktree.endsWith(key))),
     ),

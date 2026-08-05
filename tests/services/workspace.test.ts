@@ -15,6 +15,7 @@ import { mockConfig } from '../helpers.ts';
 import {
   wireSkills,
   addGitExcludes,
+  setGitIdentity,
   mirrorPath,
   worktreePath,
   ensureRepoCache,
@@ -335,5 +336,40 @@ describe('resolveSeedRepo', () => {
 
   test('falls back to a plain clone when the path does not exist', () => {
     expect(resolveSeedRepo(join(root, 'does-not-exist'))).toBeUndefined();
+  });
+});
+
+describe('setGitIdentity', () => {
+  test('writes an identity other tools can read from git config', async () => {
+    const repo = join(root, 'identity-repo');
+    mkdirSync(repo, { recursive: true });
+
+    const run = async (args: string[]) => {
+      const proc = Bun.spawn(['git', ...args], {
+        cwd: repo,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [out, err, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      if (code !== 0) throw new Error(`git ${args.join(' ')} failed: ${err}`);
+      return out.trim();
+    };
+
+    await run(['init', '-q', '-b', 'main']);
+
+    await setGitIdentity(mockConfig(), repo, {
+      name: 'Continia Bank Comm Agent',
+      email: 'noreply@continia.com',
+    });
+
+    // Reading it back through `git config` is the whole point: the Object ID
+    // Ninja MCP does exactly this, and the per-invocation `-c` args that
+    // commitAndPush uses are invisible to it.
+    expect(await run(['config', 'user.email'])).toBe('noreply@continia.com');
+    expect(await run(['config', 'user.name'])).toBe('Continia Bank Comm Agent');
   });
 });
