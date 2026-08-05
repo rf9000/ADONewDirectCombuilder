@@ -55,6 +55,20 @@ describe('resolveEntryPhase', () => {
     expect(resolveEntryPhase({ phase: 'failed' }, all, false).phase).toBe('planning');
   });
 
+  test('a failed job whose recorded phase is itself non-resumable plans and wipes the workspace', () => {
+    // failedAtPhase is the full JobPhase union; a job can fail while its
+    // recorded phase was still 'awaiting-answers' (e.g. posting the
+    // questions comment threw). That is not one of the four resumable
+    // phases, so it must not be resumed as-is.
+    const d = resolveEntryPhase(
+      { phase: 'failed', failedAtPhase: 'awaiting-answers' },
+      all,
+      false,
+    );
+    expect(d.phase).toBe('planning');
+    expect(d.cleanWorkspace).toBe(true);
+  });
+
   test('new unmarked comments force a re-plan over any recorded phase', () => {
     const d = resolveEntryPhase({ phase: 'publishing' }, all, true);
     expect(d.phase).toBe('planning');

@@ -66,6 +66,20 @@ export function resolveEntryPhase(
       wanted = 'planning';
   }
 
+  // `failedAtPhase` is typed as the full JobPhase union, not narrowed to the
+  // four resumable phases, so a job that failed while its recorded phase was
+  // itself non-resumable (e.g. it threw while still 'new' or
+  // 'awaiting-answers') can leave `wanted` outside `ORDER`. Treat that the
+  // same as having nothing useful to resume: plan from scratch, with the
+  // workspace wipe `cleanWorkspace` implies — resuming without wiping here
+  // would silently inherit a worktree from whatever phase actually ran.
+  if (!ORDER.includes(wanted)) {
+    return decide(
+      'planning',
+      `recorded phase '${wanted}' is not resumable — planning from scratch`,
+    );
+  }
+
   // Walk backwards from the wanted phase to the first phase whose required
   // inputs are all present. `planning` requires nothing, so this always
   // terminates. The reason from the most recent downgrade is carried
