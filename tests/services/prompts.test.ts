@@ -5,6 +5,8 @@ import {
   buildWorkItemContext,
   buildQuestionsComment,
   escapeHtml,
+  BOT_COMMENT_MARKER,
+  isBotComment,
 } from '../../src/services/prompts.ts';
 import type { PlanQuestions } from '../../src/types/index.ts';
 
@@ -167,6 +169,34 @@ describe('escapeHtml', () => {
     expect(escapeHtml('<a href="x">&</a>')).toBe(
       '&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;',
     );
+  });
+});
+
+describe('bot comment marker', () => {
+  test('every comment the pipeline posts carries the marker', () => {
+    const questions: PlanQuestions = {
+      blocking: [{ question: 'Which auth flow?' }],
+      ambiguities: [],
+    };
+
+    // A new comment type added without a marker would make staleness
+    // detection permanently re-plan, so assert on every builder.
+    expect(buildQuestionsComment(mockConfig(), questions, 1, false)).toContain(
+      BOT_COMMENT_MARKER,
+    );
+    expect(buildQuestionsComment(mockConfig(), questions, 3, true)).toContain(
+      BOT_COMMENT_MARKER,
+    );
+  });
+
+  test('isBotComment matches only marked text', () => {
+    expect(isBotComment(`<!-- new-comm-builder -->\n<b>hi</b>`)).toBe(true);
+    expect(isBotComment('I answered your questions')).toBe(false);
+    expect(isBotComment('')).toBe(false);
+  });
+
+  test('the marker is stripped from prompt text', () => {
+    expect(htmlToText(`${BOT_COMMENT_MARKER}\nplain`)).toBe('plain');
   });
 });
 

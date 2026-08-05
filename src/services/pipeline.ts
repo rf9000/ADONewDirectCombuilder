@@ -567,7 +567,7 @@ export function buildSuccessComment(
   prs: PullRequestRef[],
   verify: VerifyResult,
 ): string {
-  const lines = ['<b>Bank integration implemented</b>', ''];
+  const lines = [prompts.BOT_COMMENT_MARKER, '<b>Bank integration implemented</b>', ''];
 
   if (prs.length === 0) {
     lines.push('No pull request was needed — no files changed.');
@@ -600,6 +600,7 @@ async function reportFailure(
   const tail = deps.tailLog(failedPhaseLog(config, item.id, deps), 25);
 
   const comment = [
+    prompts.BOT_COMMENT_MARKER,
     '<b>Bank integration run failed</b>',
     '',
     `<pre>${prompts.escapeHtml(message)}</pre>`,

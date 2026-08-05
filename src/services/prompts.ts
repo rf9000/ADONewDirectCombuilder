@@ -277,6 +277,24 @@ Write \`${paths.verifyResultPath}\`:
 \`failedTests\`. Be accurate — a false \`true\` puts broken code in front of reviewers.`;
 }
 
+/**
+ * Hidden sentinel on every comment this pipeline posts.
+ *
+ * Staleness detection has to ignore our own comments, or every retry sees
+ * "new comments" and resume never engages. Author is not usable as the
+ * discriminator: `createdBy.uniqueName` is the PAT owner, who is also likely
+ * to be the person answering, and it breaks outright once the agent gets its
+ * own service account or several people take turns re-triggering a job.
+ *
+ * `htmlToText` strips `<[^>]+>`, so this reaches neither the agent's prompt
+ * nor the ADO comment editor.
+ */
+export const BOT_COMMENT_MARKER = '<!-- new-comm-builder -->';
+
+export function isBotComment(text: string): boolean {
+  return text.includes(BOT_COMMENT_MARKER);
+}
+
 /** The comment we post when the planner needs human input. */
 export function buildQuestionsComment(
   config: AppConfig,
@@ -292,6 +310,7 @@ export function buildQuestionsComment(
   // means the job sits in awaiting-answers indefinitely — the tag is the only
   // thing that resumes it, so silence looks identical to a hung bot.
   const lines: string[] = [
+    BOT_COMMENT_MARKER,
     `<b>Bank integration planner — round ${round}: input needed</b>`,
     '',
     '<b>This job is paused and will not continue on its own.</b>',

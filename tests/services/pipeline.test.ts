@@ -14,6 +14,7 @@ import {
   prTitle,
   type PipelineDeps,
 } from '../../src/services/pipeline.ts';
+import { BOT_COMMENT_MARKER } from '../../src/services/prompts.ts';
 import type {
   AppConfig,
   PlanQuestions,
@@ -440,6 +441,12 @@ describe('runJob — failures', () => {
     const swap = (deps.swapWorkItemTags as ReturnType<typeof mock>).mock.calls.at(-1)!;
     expect(swap[3]).toEqual([cfg.failedTag]);
     expect(deps.removeAllWorktrees).toHaveBeenCalled();
+
+    // Marked so staleness detection does not mistake our own failure report
+    // for a human comment on the next retry.
+    const comment = (deps.addWorkItemComment as ReturnType<typeof mock>).mock
+      .calls.at(-1)![2] as string;
+    expect(comment).toContain(BOT_COMMENT_MARKER);
   });
 
   test('a failed job is retried on the next poll', async () => {
@@ -574,6 +581,7 @@ describe('PR content', () => {
     expect(comment).toContain('https://ado/1');
     expect(comment).toContain('https://ado/2');
     expect(comment).toContain('left running');
+    expect(comment).toContain(BOT_COMMENT_MARKER);
   });
 
   test('the success comment handles the no-change case', () => {
