@@ -67,6 +67,32 @@ plans don't contain.
 - Don't plan tests for setup-JSON config values themselves (that's data, not code) — test the AL
   behavior that *reads* the config.
 
+### Verify every signature you write against the repo
+
+A pseudo-test that names a real-looking member with the wrong shape reads as correct
+through review and fails at compile time, in the builder's hands rather than yours.
+Three such defects shipped in one plan on 2026-08-05:
+
+| Planned | Reality |
+|---|---|
+| `SetResponseHandling(<ExportCodeunit>)` in a `given` | the export codeunit implements the 5-param `IResponseExportHandling`, not the 6-param `IResponseHandling` — it cannot be passed |
+| `T-Import-16` discriminating two branches via the `var BankAccount` overload | that overload has `ThrowError = true` on both branches, so it cannot tell them apart; the plain overload is what the `then` clause actually describes |
+| `MatchAndUpdateStatus(RecordRef, Dict, Handled)` | the real member takes 2 arguments and *returns* the flag |
+
+Before writing any member into a pseudo-test, grep its declaration and check the
+parameter count, the interface it belongs to, and whether it returns or assigns. All
+three above were falsifiable in one grep each. The first also contradicted the skill's
+own §9 L4 — so when a signature disagrees with another part of the plan, resolve it
+against the repo rather than picking one.
+
+### Cross-app test codeunits must satisfy that app's `mandatoryAffixes`
+
+`base-application-test` mandates `CTS-CB`, `import-test` mandates `CTS-PI`, and
+`export-test` mandates `CTS-PE` — check each app's `app.json`, and note all ~500 existing
+objects in each comply. A name like `TestAcmeBankStmtConv` in `import-test` is rejected by
+the compiler; it must be `CTS-PI Test AcmeBank StmtConv`. Apply the affix of the app the
+codeunit lands in, not the one the feature belongs to.
+
 ## Output — Test Plan fragment
 
 ```
