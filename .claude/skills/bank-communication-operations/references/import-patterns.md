@@ -345,6 +345,37 @@ begin
 end;
 ```
 
+## `Import` returning true proves nothing — assert on downstream artifacts
+
+The import codeunit's job **ends at the File Archive**. `HandleRequestEntryResponseObject`
+above inserts the raw base64/JSON blob and the codeunit returns `true`. Turning a CAMT.053
+into `CTS-PI Bank Transac. Header`/`Line` rows, or a custom-status blob into
+`CTS-PE Payment Status Entry` rows, is a **second Continia Online round-trip** — made by
+`FileConversion.Codeunit.al:25` via `ProcessFiles.Codeunit.al:26`, *not* by the import
+codeunit.
+
+**That second step fails silently.** On a conversion failure `ProcessFiles.Codeunit.al:26-29`
+sets `"Processing Error" := true` and `"Processing Error Message"`, then falls straight through
+to `SetProcessed` / `FileArchive.Modify()` / `Commit()` at `:31-35` — with a comment stating the
+commit is deliberate, so the next record's failure doesn't roll this one back. **No `Error` is
+raised anywhere on that path**, and the entry is marked processed either way. A failed
+conversion is indistinguishable from a successful one at the import codeunit's return value.
+
+Consequences worth designing around:
+
+- **Never write a test whose only assertion is that `Import` returned true.** Assert on the
+  downstream rows — bank transactions, payment status entries — or on
+  `"Processing Error"`/`"Processing Error Message"` on the File Archive entry.
+- **Cross-app test placement is forced by this.** `CTS-PI Bank Transac. Header`/`Line` live in
+  the Import app and `CTS-PE Payment Status Entry` in the Export app, so downstream assertions
+  cannot be made from `base-application-test` — check the `app.json` dependency graph and put
+  those tests in `import-test`/`export-test`.
+- **Conversion support is a per-(bank system, file type) connector capability.** If Continia
+  Online has no `Convert` route for a pairing, imports appear to succeed forever and no data
+  ever lands. Treat it as an explicit go-live prerequisite to confirm, not an assumption.
+- The `Convert` URL row already exists globally (`GeneralData.json`, key `"Convert"`), so a
+  missing capability is a connector-side gap, not a missing setup row.
+
 ## Old Async Entry Processing
 
 ```al
