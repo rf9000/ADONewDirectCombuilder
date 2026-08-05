@@ -47,12 +47,16 @@ beforeEach(() => {
   mkdirSync(join(skillsSource, 'commands'), { recursive: true });
   writeFileSync(join(skillsSource, 'commands', 'fw-create-pr.md'), '# pr', 'utf-8');
 
-  // A stand-in worktree whose .git is a file, as git creates for real worktrees.
+  // A stand-in worktree whose .git is a file, as git creates for real worktrees —
+  // including the `commondir` pointer, without which the fixture would be
+  // unrealistic in exactly the way that hid the info/exclude bug.
   worktree = join(root, 'worktrees', '42', 'banking');
   mkdirSync(worktree, { recursive: true });
-  const gitDir = join(root, 'repos', 'banking.git', 'worktrees', 'banking');
+  const commonDir = join(root, 'repos', 'banking.git');
+  const gitDir = join(commonDir, 'worktrees', 'banking');
   mkdirSync(gitDir, { recursive: true });
   writeFileSync(join(worktree, '.git'), `gitdir: ${gitDir}\n`, 'utf-8');
+  writeFileSync(join(gitDir, 'commondir'), '../..\n', 'utf-8');
 });
 
 afterEach(() => {
@@ -68,15 +72,9 @@ function config() {
 }
 
 function excludeLines(): string[] {
-  const file = join(
-    root,
-    'repos',
-    'banking.git',
-    'worktrees',
-    'banking',
-    'info',
-    'exclude',
-  );
+  // The COMMON dir, not the per-worktree gitdir — that is where git reads
+  // info/exclude from, and writing it anywhere else is silently inert.
+  const file = join(root, 'repos', 'banking.git', 'info', 'exclude');
   if (!existsSync(file)) return [];
   return readFileSync(file, 'utf-8')
     .split(/\r?\n/)
@@ -177,9 +175,62 @@ describe('wireSkills', () => {
 });
 
 describe('addGitExcludes', () => {
-  test('resolves the per-worktree gitdir from the .git file', () => {
+  test('follows commondir to the shared gitdir, not the per-worktree one', () => {
     addGitExcludes(worktree, ['/.agent/']);
+
     expect(excludeLines()).toContain('/.agent/');
+    // Writing here instead would be inert — git never reads it.
+    expect(
+      existsSync(
+        join(root, 'repos', 'banking.git', 'worktrees', 'banking', 'info', 'exclude'),
+      ),
+    ).toBe(false);
+  });
+
+  test('real git worktree: an excluded path does not show in git status', async () => {
+    const origin = join(root, 'origin');
+    mkdirSync(origin, { recursive: true });
+    const run = async (args: string[], cwd: string) => {
+      const proc = Bun.spawn(['git', ...args], {
+        cwd,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [out, err, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      // Without this the test passes vacuously: a failed git call yields empty
+      // output, and "no output" is exactly what the assertion below wants.
+      if (code !== 0) throw new Error(`git ${args.join(' ')} failed: ${err}`);
+      return out;
+    };
+
+    await run(['init', '-q', '-b', 'main'], origin);
+    await run(['config', 'user.email', 't@example.com'], origin);
+    await run(['config', 'user.name', 'Test'], origin);
+    writeFileSync(join(origin, 'README.md'), '# x', 'utf-8');
+    await run(['add', '-A'], origin);
+    await run(['commit', '-qm', 'init'], origin);
+
+    const linked = join(root, 'linked');
+    // --detach: `main` is already checked out in origin, and a linked worktree
+    // cannot share a branch. The pipeline clones bare, so it never hits this.
+    await run(['worktree', 'add', '-q', '--detach', linked, 'HEAD'], origin);
+
+    // Simulate what the pipeline does: register the artifact dir, then create it.
+    addGitExcludes(linked, ['/.agent/']);
+    mkdirSync(join(linked, '.agent', 'plan'), { recursive: true });
+    writeFileSync(join(linked, '.agent', 'plan', 'questions.json'), '{}', 'utf-8');
+
+    // Positive control: an unexcluded file must still be reported, otherwise a
+    // silently broken git harness would satisfy the .agent assertion for free.
+    writeFileSync(join(linked, 'stray.txt'), 'x', 'utf-8');
+
+    const status = await run(['status', '--porcelain'], linked);
+    expect(status).toContain('stray.txt');
+    expect(status).not.toContain('.agent');
   });
 
   test('appends without duplicating existing entries', () => {

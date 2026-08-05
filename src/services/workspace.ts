@@ -302,7 +302,7 @@ function isSymlink(path: string): boolean {
 export function addGitExcludes(worktree: string, paths: string[]): void {
   if (paths.length === 0) return;
 
-  const gitDir = resolveGitDir(worktree);
+  const gitDir = resolveGitCommonDir(worktree);
   if (!gitDir) return;
 
   const infoDir = join(gitDir, 'info');
@@ -321,20 +321,38 @@ export function addGitExcludes(worktree: string, paths: string[]): void {
 }
 
 /**
- * In a worktree `.git` is a file containing `gitdir: <path>`, not a directory.
- * Exclusions must go in that per-worktree gitdir.
+ * Resolve the directory whose `info/exclude` git actually reads.
+ *
+ * In a linked worktree `.git` is a file containing `gitdir: <path>`, and that
+ * per-worktree gitdir is NOT where exclusions belong: git reads `info/exclude`
+ * from the common dir, so anything written under `worktrees/<name>/info/` is
+ * silently inert. Each linked worktree's gitdir carries a `commondir` file
+ * pointing at the shared directory — follow it.
+ *
+ * This was a real bug: `.agent/` showed up as untracked in `git status` despite
+ * being registered, and `commitAndPush` runs `git add -A`, so the plan and
+ * verify artifacts would have landed in a pull request diff.
  */
-function resolveGitDir(worktree: string): string | undefined {
+function resolveGitCommonDir(worktree: string): string | undefined {
   const dotGit = join(worktree, '.git');
   if (!existsSync(dotGit)) return undefined;
 
-  if (lstatSync(dotGit).isDirectory()) return dotGit;
+  let gitDir: string;
+  if (lstatSync(dotGit).isDirectory()) {
+    gitDir = dotGit;
+  } else {
+    const contents = readFileSync(dotGit, 'utf-8').trim();
+    const match = /^gitdir:\s*(.+)$/.exec(contents);
+    if (!match || !match[1]) return undefined;
+    gitDir = resolve(worktree, match[1].trim());
+  }
 
-  const contents = readFileSync(dotGit, 'utf-8').trim();
-  const match = /^gitdir:\s*(.+)$/.exec(contents);
-  if (!match || !match[1]) return undefined;
-  const gitDir = match[1].trim();
-  return resolve(worktree, gitDir);
+  const commonDirFile = join(gitDir, 'commondir');
+  if (!existsSync(commonDirFile)) return gitDir;
+
+  const commonDir = readFileSync(commonDirFile, 'utf-8').trim();
+  if (commonDir === '') return gitDir;
+  return resolve(gitDir, commonDir);
 }
 
 export async function hasChanges(config: AppConfig, worktree: string): Promise<boolean> {
