@@ -46,18 +46,41 @@ resolveEntryPhase(job, available, hasNewComments) → JobPhase
 Two preconditions are evaluated before the table below, because both override it.
 
 **New human comments force a re-plan.** `runPlanningPhase` already writes
-`lastSeenCommentId` (`pipeline.ts:204`) and nothing reads it. If the newest comment ID
-exceeds it, the plan was made without that input, so entry is forced to `planning`
-whatever the recorded phase says. This makes "I read the failure, answered it, and
-re-triggered" produce the re-plan the human expects, while a bare re-trigger stays a true
-resume.
+`lastSeenCommentId` (`pipeline.ts:204`) and nothing reads it. If a newer comment exists
+that the pipeline did not write, the plan was made without that input, so entry is forced
+to `planning` whatever the recorded phase says. "I read the failure, answered it, and
+re-triggered" gets the re-plan the human expects; a bare re-trigger stays a true resume.
 
-This only works if the bot's own comments don't count. `reportFailure` and the questions
-comment both post *after* planning, so their IDs necessarily exceed `lastSeenCommentId` —
-left unhandled, every retry would see "new comments" and `failedAtPhase` would be dead
-code. `addWorkItemComment` returns the created `WorkItemComment` including its `id`, so
-the pipeline advances `lastSeenCommentId` to that value every time it posts. Only
-comments the pipeline did not write can then trigger a re-plan.
+This only works if the pipeline's own comments don't count. `reportFailure`, the questions
+comment and the success comment all post *after* planning, so their IDs necessarily exceed
+`lastSeenCommentId` — left unhandled, every retry would see "new comments" and
+`failedAtPhase` would be dead code.
+
+**The discriminator is a marker, not an author.** Every comment the pipeline posts carries
+a hidden sentinel:
+
+```html
+<!-- new-comm-builder -->
+```
+
+Comments carrying it are excluded when computing the newest comment, and
+`lastSeenCommentId` records the newest *unmarked* comment at plan time. Posting therefore
+requires no bookkeeping — the pipeline's own comments can never advance the watermark
+because they are never counted.
+
+Author-based filtering was considered and rejected. `createdBy.uniqueName` is the PAT
+owner, which today is a real person who is also likely to be the one answering questions,
+so it cannot separate the two. It also breaks the moment the agent moves to its own
+service account, or when several different people take turns re-triggering a job — both of
+which are expected. A marker is independent of identity and survives both.
+
+`htmlToText` strips `<[^>]+>`, which includes HTML comments, so the marker never reaches
+the agent's prompt. It is invisible in the ADO comment editor too.
+
+*Accepted edge case:* a human who quote-replies to a bot comment could carry the marker
+into their own text, and that reply would then be ignored for staleness. Unlikely — the
+marker is invisible in the editor, so it would have to survive a copy-paste of raw HTML —
+and the cost is one missed re-plan, recoverable with `reset-item`.
 
 **Entering at `planning` means a clean workspace.** Whenever resolution lands on
 `planning` — new job, `reset-item`, `awaiting-answers`, a fallback downgrade, or the
@@ -202,11 +225,13 @@ Against the existing mocked `PipelineDeps`:
 The two preconditions need their own tests, and the third of these is the one that would
 catch the mistake that makes the whole feature inert:
 
-- a newer human comment forces entry at `planning` even when the phase is `publishing`
+- a newer unmarked comment forces entry at `planning` even when the phase is `publishing`
 - entering at `planning` calls `removeAllWorktrees` first; entering at `implementing` does
   not
-- a job whose only new comment is one the pipeline itself posted resumes at
-  `failedAtPhase` — it does **not** re-plan
+- a job whose only newer comments carry the marker resumes at `failedAtPhase` — it does
+  **not** re-plan
+- every comment the pipeline posts contains the marker (assert on the builders in
+  `prompts.ts`, so a new comment type can't be added without one)
 
 Existing tests assert today's behaviour — that failure removes worktrees — and will need
 inverting. That is the change being real, not an obstacle to route around.
@@ -215,7 +240,8 @@ inverting. That is the change being real, not an obstacle to route around.
 
 | File | Change |
 |---|---|
-| `src/services/pipeline.ts` | dispatch, the two preconditions, `failedAtPhase`, advance `lastSeenCommentId` on every posted comment, drop failure-path worktree removal, attachment call, read `changeSummary` from artifact |
+| `src/services/pipeline.ts` | dispatch, the two preconditions, `failedAtPhase`, drop failure-path worktree removal, attachment call, read `changeSummary` from artifact |
+| `src/services/prompts.ts` | emit the `<!-- new-comm-builder -->` marker in every comment builder; export the constant and a predicate for filtering |
 | `src/services/workspace.ts` | none — `createWorktree` is already idempotent (`:183`) |
 | `src/sdk/azure-devops-client.ts` | `uploadAttachment`, `linkAttachmentToWorkItem` |
 | `src/state/state-store.ts` | `failedAtPhase` on the job record |
