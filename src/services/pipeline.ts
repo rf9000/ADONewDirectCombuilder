@@ -1,4 +1,4 @@
-import { mkdirSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type {
   AgentRunResult,
@@ -94,6 +94,7 @@ function pathsFor(bankingWorktree: string): prompts.PhasePaths {
     designDocPath: join(agentDir, 'plan', 'design-doc.md'),
     taskListPath: join(agentDir, 'plan', 'tasklist.json'),
     verifyResultPath: join(agentDir, 'verify', 'result.json'),
+    implementSummaryPath: join(agentDir, 'implement', 'summary.json'),
   };
 }
 
@@ -138,6 +139,7 @@ async function prepareWorkspaces(
 
   mkdirSync(join(banking, AGENT_DIR, 'plan'), { recursive: true });
   mkdirSync(join(banking, AGENT_DIR, 'verify'), { recursive: true });
+  mkdirSync(join(banking, AGENT_DIR, 'implement'), { recursive: true });
 
   return { banking, setupFiles };
 }
@@ -262,6 +264,14 @@ export async function runImplementPhase(ctx: PhaseContext): Promise<string> {
   });
   assertAgentSucceeded(result, 'implementing');
 
+  // Written as an artifact, not just returned, so publish can read it even
+  // when it is entered directly rather than falling through from implement.
+  writeFileSync(
+    paths.implementSummaryPath,
+    JSON.stringify({ summary: result.text }, null, 2),
+    'utf-8',
+  );
+
   return result.text;
 }
 
@@ -305,14 +315,19 @@ export async function runVerifyPhase(ctx: PhaseContext): Promise<VerifyResult> {
 /** Push both branches; open a draft PR per repo that actually changed. */
 export async function runPublishPhase(
   ctx: PhaseContext,
-  changeSummary: string,
   verify: VerifyResult,
 ): Promise<PullRequestRef[]> {
-  const { config, item, store, deps } = ctx;
+  const { config, item, store, deps, paths } = ctx;
 
   store.setPhase(item.id, 'publishing');
   store.save();
   log(`  Item #${item.id}: publishing`);
+
+  // Read rather than threaded through memory, so publish can be entered
+  // directly without implement having run in this process.
+  const changeSummary =
+    deps.readJsonArtifact<{ summary?: string }>(paths.implementSummaryPath)?.summary ??
+    '(no change summary recorded)';
 
   const title = prTitle(item);
   const description = buildPrDescription(item, changeSummary, verify);
@@ -460,7 +475,7 @@ export async function runJob(
     }
 
     // ---- build ----
-    const changeSummary = await runImplementPhase(ctx);
+    await runImplementPhase(ctx);
 
     const anyChanges =
       (await deps.hasChanges(config, worktrees.banking)) ||
@@ -500,7 +515,7 @@ export async function runJob(
     }
 
     // ---- publish ----
-    const prs = await runPublishPhase(ctx, changeSummary, verify);
+    const prs = await runPublishPhase(ctx, verify);
 
     await deps.addWorkItemComment(
       config,

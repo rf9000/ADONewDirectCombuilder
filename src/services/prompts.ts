@@ -99,6 +99,12 @@ export interface PhasePaths {
   designDocPath: string;
   taskListPath: string;
   verifyResultPath: string;
+  /**
+   * Where the implement phase records what it changed, for publish to read
+   * — so publish can be entered directly, without implement having run in
+   * the same process.
+   */
+  implementSummaryPath: string;
 }
 
 export function buildPlanningPrompt(

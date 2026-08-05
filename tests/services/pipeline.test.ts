@@ -6,6 +6,7 @@ import { mockConfig, mockWorkItem } from '../helpers.ts';
 import { StateStore } from '../../src/state/state-store.ts';
 import {
   runJob,
+  runPublishPhase,
   slugify,
   branchNameFor,
   buildPrDescription,
@@ -13,10 +14,13 @@ import {
   failedPhaseLog,
   prTitle,
   type PipelineDeps,
+  type PhaseContext,
 } from '../../src/services/pipeline.ts';
 import { BOT_COMMENT_MARKER } from '../../src/services/prompts.ts';
+import type { PhasePaths } from '../../src/services/prompts.ts';
 import type {
   AppConfig,
+  JobRecord,
   PlanQuestions,
   PullRequestRef,
   VerifyResult,
@@ -168,6 +172,24 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
     },
     tailLog: () => '(log)',
   } as unknown as PipelineDeps;
+}
+
+/**
+ * Seed the shared `store` with a job already at `phase` (plus any overrides —
+ * Task 5 uses this to seed `failedAtPhase` and `lastSeenCommentId`) and run it
+ * through `runJob`. Until Task 5 adds the dispatch that resolves an entry
+ * phase, `runJob` still runs every phase from planning regardless of what is
+ * seeded here — this is a seeding-and-invoking convenience, not yet a way to
+ * skip phases.
+ */
+function runProcessItemAtPhase(
+  phase: JobRecord['phase'],
+  deps: PipelineDeps,
+  jobOverrides: Partial<JobRecord> = {},
+) {
+  const item = mockWorkItem();
+  store.update(item.id, { phase, ...jobOverrides });
+  return runJob(config(), item, store, deps);
 }
 
 describe('slugify', () => {
@@ -468,6 +490,94 @@ describe('runJob — failures', () => {
 
     expect(result.processed).toBe(false);
     expect(result.error).toContain('ADO is down');
+  });
+});
+
+describe('runJob — change summary hand-off', () => {
+  test('publish reads the change summary from the artifact, not an argument', async () => {
+    const deps = makeDeps();
+    // implement's real write still happens; only the read is intercepted, so
+    // this proves publish goes through deps.readJsonArtifact for this path
+    // rather than an in-memory value carried over from implement.
+    const real = deps.readJsonArtifact;
+    deps.readJsonArtifact = mock((path: string) =>
+      path.endsWith('summary.json') ? { summary: 'from artifact' } : real(path),
+    );
+
+    const result = await runProcessItemAtPhase('publishing', deps);
+
+    expect(result.phase).toBe('done');
+    const prCall = (deps.createPullRequest as ReturnType<typeof mock>).mock.calls[0]!;
+    expect(JSON.stringify(prCall[2])).toContain('from artifact');
+  });
+});
+
+describe('runPublishPhase — direct', () => {
+  /**
+   * Build a `PhaseContext` by hand so `runPublishPhase` can be exercised
+   * without going through `runJob` — the only way to prove the *file* is the
+   * channel, since an end-to-end run through `runJob` would have implement
+   * write the same summary that publish then reads and could not tell a file
+   * read apart from a leftover in-memory value.
+   */
+  function makeDirectCtx(deps: PipelineDeps, implementSummaryPath: string): PhaseContext {
+    const cfg = config();
+    const item = mockWorkItem();
+    const agentDir = join(root, 'direct', '.agent');
+    const paths: PhasePaths = {
+      agentDir,
+      questionsPath: join(agentDir, 'plan', 'questions.json'),
+      artifactsPath: join(agentDir, 'plan', 'artifacts.json'),
+      designDocPath: join(agentDir, 'plan', 'design-doc.md'),
+      taskListPath: join(agentDir, 'plan', 'tasklist.json'),
+      verifyResultPath: join(agentDir, 'verify', 'result.json'),
+      implementSummaryPath,
+    };
+
+    return {
+      config: cfg,
+      item,
+      job: store.ensure(item.id),
+      store,
+      deps,
+      branch: branchNameFor(cfg, item),
+      worktrees: {
+        banking: join(root, 'direct', 'banking'),
+        setupFiles: join(root, 'direct', 'setupFiles'),
+      },
+      paths,
+      comments: [],
+      workItemContext: '',
+    };
+  }
+
+  test('reads the change summary written to summary.json on disk', async () => {
+    const deps = makeDeps();
+    const summaryPath = join(root, 'direct', '.agent', 'implement', 'summary.json');
+    mkdirSync(join(root, 'direct', '.agent', 'implement'), { recursive: true });
+    writeFileSync(
+      summaryPath,
+      JSON.stringify({ summary: 'distinctive-summary-on-disk' }),
+      'utf-8',
+    );
+
+    const ctx = makeDirectCtx(deps, summaryPath);
+    await runPublishPhase(ctx, PASSING_VERIFY);
+
+    const prCall = (deps.createPullRequest as ReturnType<typeof mock>).mock.calls[0]!;
+    expect(prCall[2].description).toContain('distinctive-summary-on-disk');
+  });
+
+  test('falls back to a fixed string when summary.json is missing', async () => {
+    const deps = makeDeps();
+    const summaryPath = join(root, 'direct', '.agent', 'implement', 'summary.json');
+    // Deliberately not written.
+
+    const ctx = makeDirectCtx(deps, summaryPath);
+    await runPublishPhase(ctx, PASSING_VERIFY);
+
+    const prCall = (deps.createPullRequest as ReturnType<typeof mock>).mock.calls[0]!;
+    expect(prCall[2].description).toContain('(no change summary recorded)');
   });
 });
 
