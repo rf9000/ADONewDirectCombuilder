@@ -375,8 +375,24 @@ describe('tags', () => {
     );
 
     const init = mockFn.mock.calls[0]![1] as RequestInit;
-    const body = JSON.parse(init.body as string) as Array<{ value: string }>;
+    const body = JSON.parse(init.body as string) as Array<{ op: string; value: string }>;
     expect(body[0]!.value).toBe('banking; keep-me; create-new-comm-waiting');
+    // The op is load-bearing: ADO merges on `add`, so with `add` the computed
+    // value above is correct and the removal still silently fails.
+    expect(body[0]!.op).toBe('replace');
+  });
+
+  test('swapWorkItemTags falls back to add when the item has no tags yet', async () => {
+    setMockFetch(mockWorkItem());
+    const item = mockWorkItem({ fields: {} });
+
+    await swapWorkItemTags(mockConfig(), item, ['create-new-comm'], ['waiting']);
+
+    const init = mockFn.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(init.body as string) as Array<{ op: string; value: string }>;
+    // `replace` errors on a field that has never been set.
+    expect(body[0]!.op).toBe('add');
+    expect(body[0]!.value).toBe('waiting');
   });
 
   test('swapWorkItemTags does not duplicate a tag that is already present', async () => {

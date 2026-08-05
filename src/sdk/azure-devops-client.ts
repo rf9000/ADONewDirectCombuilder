@@ -121,17 +121,26 @@ export async function getWorkItemsBatch(
   return data.value;
 }
 
+/**
+ * `op` matters for multi-value fields: on `System.Tags`, ADO treats `add` as a
+ * merge with the existing set, so a value that omits a tag does not remove it.
+ * `replace` overwrites. Use `replace` whenever the field already has a value —
+ * it errors on a field that has never been set, which is why it isn't the
+ * default here. Same conclusion the docs-writer bot reached
+ * (`DevOpsdocsWriter/src/sdk/azure-devops-client.ts:160`).
+ */
 export async function updateWorkItemField(
   config: AppConfig,
   workItemId: number,
   fieldName: string,
   value: string,
+  op: 'add' | 'replace' = 'add',
 ): Promise<WorkItemResponse> {
   const path = `wit/workitems/${workItemId}?api-version=7.0`;
   return adoFetchWithRetry<WorkItemResponse>(config, path, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json-patch+json' },
-    body: JSON.stringify([{ op: 'add', path: `/fields/${fieldName}`, value }]),
+    body: JSON.stringify([{ op, path: `/fields/${fieldName}`, value }]),
   });
 }
 
@@ -187,13 +196,19 @@ export async function setWorkItemTags(
   config: AppConfig,
   workItemId: number,
   tags: string[],
+  op: 'add' | 'replace' = 'add',
 ): Promise<WorkItemResponse> {
-  return updateWorkItemField(config, workItemId, 'System.Tags', tags.join('; '));
+  return updateWorkItemField(config, workItemId, 'System.Tags', tags.join('; '), op);
 }
 
 /**
  * Swap tags in one PATCH: everything in `remove` goes, everything in `add`
  * arrives. Case-insensitive on removal, order-preserving otherwise.
+ *
+ * Sends `replace` when the item already carries tags. With `add` the removals
+ * silently no-op — ADO merges rather than overwrites — which left the trigger
+ * tag in place next to the waiting tag, so the watcher re-picked the item every
+ * poll and paid for a fresh planning run each time.
  */
 export async function swapWorkItemTags(
   config: AppConfig,
@@ -201,11 +216,17 @@ export async function swapWorkItemTags(
   remove: string[],
   add: string[],
 ): Promise<WorkItemResponse> {
+  const current = parseTags(item);
   const removeSet = new Set(remove.map((t) => t.toLowerCase()));
-  const kept = parseTags(item).filter((t) => !removeSet.has(t.toLowerCase()));
+  const kept = current.filter((t) => !removeSet.has(t.toLowerCase()));
   const keptSet = new Set(kept.map((t) => t.toLowerCase()));
   const added = add.filter((t) => !keptSet.has(t.toLowerCase()));
-  return setWorkItemTags(config, item.id, [...kept, ...added]);
+  return setWorkItemTags(
+    config,
+    item.id,
+    [...kept, ...added],
+    current.length > 0 ? 'replace' : 'add',
+  );
 }
 
 // ---------------------------------------------------------------------------
