@@ -103,8 +103,17 @@ export async function runPollCycle(
       else errors++;
     } catch (err) {
       log(`  Item #${item.id}: fatal error — ${err}`);
+
+      // `stateStore.get(item.id)?.phase` is read before this same `update`
+      // call overwrites it with 'failed' — the argument is evaluated first, so
+      // this captures the phase that actually threw. Splitting it into two
+      // statements would silently record 'failed' as the phase that failed.
+      // Without `failedAtPhase`, entry-phase.ts falls back to 'planning' with
+      // `cleanWorkspace: true`, wiping a worktree that may hold a partial
+      // implement — the exact loss this record exists to prevent.
       stateStore.update(item.id, {
         phase: 'failed',
+        failedAtPhase: stateStore.get(item.id)?.phase,
         error: err instanceof Error ? err.message : String(err),
       });
       errors++;

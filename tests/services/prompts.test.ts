@@ -4,11 +4,23 @@ import {
   htmlToText,
   buildWorkItemContext,
   buildQuestionsComment,
+  buildImplementPrompt,
   escapeHtml,
   BOT_COMMENT_MARKER,
   isBotComment,
 } from '../../src/services/prompts.ts';
+import type { PhasePaths } from '../../src/services/prompts.ts';
 import type { PlanQuestions } from '../../src/types/index.ts';
+
+const TEST_PATHS: PhasePaths = {
+  agentDir: '/work/.agent',
+  questionsPath: '/work/.agent/plan/questions.json',
+  artifactsPath: '/work/.agent/plan/artifacts.json',
+  designDocPath: '/work/.agent/plan/design-doc.md',
+  taskListPath: '/work/.agent/plan/tasklist.json',
+  verifyResultPath: '/work/.agent/verify/result.json',
+  implementSummaryPath: '/work/.agent/implement/summary.json',
+};
 
 describe('htmlToText', () => {
   test('turns block tags into line breaks', () => {
@@ -197,6 +209,26 @@ describe('bot comment marker', () => {
 
   test('the marker is stripped from prompt text', () => {
     expect(htmlToText(`${BOT_COMMENT_MARKER}\nplain`)).toBe('plain');
+  });
+});
+
+describe('buildImplementPrompt', () => {
+  test('tells the agent the worktree may already hold partial work', () => {
+    const prompt = buildImplementPrompt(
+      mockConfig(),
+      'work item context',
+      TEST_PATHS,
+      '/worktrees/banking',
+      '/worktrees/setupFiles',
+    );
+
+    // A resumed implement re-enters this exact prompt on a tree that may hold
+    // half the waves — it must be told to inventory before acting, not just
+    // to "execute wave by wave" as if starting from scratch.
+    expect(prompt).toContain('git status');
+    expect(prompt).toContain('already hold partial work');
+    expect(prompt).toContain('Continue the plan');
+    expect(prompt).toContain('Ninja MCP');
   });
 });
 

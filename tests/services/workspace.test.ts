@@ -61,7 +61,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  // maxRetries/retryDelay: real `git` subprocesses just touched this tree,
+  // and on Windows `force: true` suppresses ENOENT but not an intermittent
+  // EBUSY/EPERM from a lingering handle or an AV scan.
+  rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 });
 
 function config() {

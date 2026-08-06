@@ -50,7 +50,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  // maxRetries/retryDelay: many nested mkdirSync calls just touched this tree,
+  // and on Windows `force: true` suppresses ENOENT but not an intermittent
+  // EBUSY/EPERM from a lingering handle or an AV scan.
+  rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 });
 
 function config(overrides: Partial<AppConfig> = {}): AppConfig {
@@ -183,7 +186,14 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
     readJsonArtifact: (path: string) => {
       const fs = require('fs') as typeof import('fs');
       if (!fs.existsSync(path)) return undefined;
-      return JSON.parse(fs.readFileSync(path, 'utf-8'));
+      // Matches the real readJsonArtifact (agent-runner.ts): a parse error is
+      // caught and reported as "missing", not thrown. Fix 5 depends on this —
+      // dispatch treats a corrupt artifact the same as an absent one.
+      try {
+        return JSON.parse(fs.readFileSync(path, 'utf-8'));
+      } catch {
+        return undefined;
+      }
     },
     tailLog: () => '(log)',
     uploadAttachment: mock(async () => ({ id: 'att-1', url: 'https://example/att-1' })),
@@ -635,6 +645,21 @@ describe('runJob — dispatch', () => {
     expect((deps.removeAllWorktrees as ReturnType<typeof mock>).mock.calls).toHaveLength(2);
   });
 
+  test('a surviving setup-files-only worktree also triggers the wipe', async () => {
+    // Only the setup-files sibling survived — e.g. a partial
+    // removeAllWorktrees or a failed cleanup-worktrees. Probing the banking
+    // worktree alone would miss this and let stale setup JSON leak into a
+    // "fresh" plan and into the PR.
+    const deps = makeDeps();
+    mkdirSync(join(root, 'worktrees', String(TEST_ITEM_ID), 'setupFiles'), {
+      recursive: true,
+    });
+
+    await runJob(config(), mockWorkItem(), store, deps);
+
+    expect((deps.removeAllWorktrees as ReturnType<typeof mock>).mock.calls).toHaveLength(2);
+  });
+
   test('resuming forward does not clean the workspace', async () => {
     const deps = makeDeps();
     await runProcessItemAtPhase('implementing', deps);
@@ -648,10 +673,13 @@ describe('runJob — dispatch', () => {
       { id: 10, text: 'human question' },
       { id: 11, text: `${BOT_COMMENT_MARKER} our questions` },
     ]);
-    // lastSeenCommentId is 10; the only newer comment is ours.
+    // lastSeenCommentId is 10; the only newer comment is ours. plannerSessionId
+    // set so this exercises the marked-comment exclusion itself, not just the
+    // "never planned" gate that would also return false on its own.
     const result = await runProcessItemAtPhase('failed', deps, {
       failedAtPhase: 'implementing',
       lastSeenCommentId: 10,
+      plannerSessionId: 'sess-abc',
     });
     expect(result.phase).toBe('done');
     expect(logFiles(deps).some((f) => f.includes('plan-'))).toBe(false);
@@ -666,8 +694,48 @@ describe('runJob — dispatch', () => {
     await runProcessItemAtPhase('failed', deps, {
       failedAtPhase: 'implementing',
       lastSeenCommentId: 10,
+      plannerSessionId: 'sess-abc',
     });
     expect(logFiles(deps).some((f) => f.includes('plan-'))).toBe(true);
+  });
+
+  test('a human comment after a plan that saw none still forces a re-plan', async () => {
+    // The reachable scenario the review found: the item's description had
+    // everything needed, so the planning round watermarked no human comment
+    // and `lastSeenCommentId` stayed 0. A human correction posted after the
+    // implement failure must not be mistaken for "this job never planned" —
+    // gating on the watermark's value alone would do exactly that.
+    const deps = makeDeps();
+    deps.getWorkItemComments = mock(async () => [
+      { id: 7, text: 'use OAuth2 client credentials' },
+    ]);
+    await runProcessItemAtPhase('failed', deps, {
+      failedAtPhase: 'implementing',
+      lastSeenCommentId: 0,
+      plannerSessionId: 'sess-abc',
+    });
+    expect(logFiles(deps).some((f) => f.includes('plan-'))).toBe(true);
+  });
+
+  test('a corrupt tasklist.json is treated as missing, so implement falls back to planning', async () => {
+    // A job recorded at 'implementing' whose plan/tasklist.json exists on
+    // disk but is not valid JSON. `existsSync` would see the file and enter
+    // directly at 'implementing', handing the agent a plan it cannot really
+    // read; `readJsonArtifact` returning undefined for the corrupt file must
+    // instead fall the entry point back to 'planning'.
+    const deps = makeDeps();
+    const agentDir = agentDirFor(TEST_ITEM_ID);
+    const planDir = join(agentDir, 'plan');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(join(planDir, 'design-doc.md'), '# seeded design doc', 'utf-8');
+    writeFileSync(join(planDir, 'tasklist.json'), '{not valid json', 'utf-8');
+
+    store.update(TEST_ITEM_ID, { phase: 'implementing' });
+
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(logFiles(deps).some((f) => f.includes('plan-'))).toBe(true);
+    expect(result.phase).toBe('done');
   });
 
   test('a failing verify read from disk still blocks the PR when entering directly at publishing', async () => {

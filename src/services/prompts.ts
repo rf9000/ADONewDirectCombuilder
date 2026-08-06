@@ -214,6 +214,17 @@ ${context}
 Read both before you start. The task list is wave-grouped; execute it wave by wave
 and respect the declared dependencies.
 
+## This worktree may already hold partial work
+
+An earlier run may have been interrupted partway through this same task list —
+the worktree survives a crash or restart so work is not thrown away. Before you
+start, inspect what is already here: run \`git status\` in both repositories, and
+check whether the AL objects and setup entries the task list names already exist.
+Continue the plan from whatever is already done rather than re-creating it —
+object IDs are reserved through the Ninja MCP, so redoing finished work burns new
+IDs for objects that already have one. On a fresh worktree this costs one
+\`git status\` and finds nothing.
+
 ## Repositories — both are yours to edit
 
 - **continia-banking** (AL objects, your working directory): \`${bankingWorktree}\`

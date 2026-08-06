@@ -466,15 +466,20 @@ export async function runJob(
     // not count, or every retry would look like a new comment arrived and
     // `failedAtPhase` would never be reachable.
     //
-    // Gated on there being a plan at all (`lastSeenCommentId > 0`): a
-    // brand-new job's watermark is 0, and any human comment on the item
-    // would otherwise compare greater, logging "stale" for a job that was
-    // never planned in the first place.
+    // Gated on "has this job ever planned?" (`plannerSessionId !== undefined`,
+    // written by runPlanningPhase in the same store.update as the watermark)
+    // rather than on the watermark's value: an item whose planning round saw
+    // no human comments keeps `lastSeenCommentId === 0` forever, and gating
+    // on `lastSeenCommentId > 0` would then treat every later human comment
+    // as if the job had never planned — silently ignoring a correction that
+    // arrives after a failure. A brand-new job has no `plannerSessionId`
+    // either, so the gate still suppresses the cosmetic "stale" log line for
+    // the case it was written for.
     const newestHumanCommentId = comments
       .filter((c) => !prompts.isBotComment(c.text ?? ''))
       .reduce((max, c) => Math.max(max, c.id), 0);
     const hasNewComments =
-      job.lastSeenCommentId > 0 && newestHumanCommentId > job.lastSeenCommentId;
+      job.plannerSessionId !== undefined && newestHumanCommentId > job.lastSeenCommentId;
 
     // Whether a previous run left a worktree behind, captured *before*
     // prepareWorkspaces creates or reuses one — after that call the answer
@@ -482,10 +487,13 @@ export async function runJob(
     // own `worktrees` field is not a substitute: `reset-item` deletes the
     // whole record (state-store.ts's `remove`), so the very case this exists
     // to catch — a stale directory surviving a reset — would report "nothing
-    // recorded" and never trigger the wipe.
-    const worktreeExisted = existsSync(
-      ws.worktreePath(config, config.repos.banking, item.id),
-    );
+    // recorded" and never trigger the wipe. Checked for both repos: a
+    // surviving setup-files worktree with no banking sibling (a partial
+    // `removeAllWorktrees`, a failed `cleanup-worktrees`) can still carry
+    // stale setup JSON into a "fresh" plan otherwise.
+    const worktreeExisted =
+      existsSync(ws.worktreePath(config, config.repos.banking, item.id)) ||
+      existsSync(ws.worktreePath(config, config.repos.setupFiles, item.id));
 
     let worktrees = await prepareWorkspaces(config, item, branch, deps);
 
@@ -502,10 +510,15 @@ export async function runJob(
       workItemContext: prompts.buildWorkItemContext(item, comments, config),
     };
 
+    // `readJsonArtifact`, not `existsSync`: all three are JSON artifacts, and
+    // `readJsonArtifact` catches a parse error and returns undefined, which
+    // makes a corrupt file indistinguishable from a missing one — a corrupt
+    // `tasklist.json` must send the implement agent back to re-plan, not hand
+    // it a broken plan it can half-parse.
     const inputs: PhaseInputs = {
-      taskList: existsSync(ctx.paths.taskListPath),
-      implementSummary: existsSync(ctx.paths.implementSummaryPath),
-      verifyResult: existsSync(ctx.paths.verifyResultPath),
+      taskList: deps.readJsonArtifact(ctx.paths.taskListPath) !== undefined,
+      implementSummary: deps.readJsonArtifact(ctx.paths.implementSummaryPath) !== undefined,
+      verifyResult: deps.readJsonArtifact(ctx.paths.verifyResultPath) !== undefined,
     };
 
     // `job` (fetched before this run touched anything) is what the resolver

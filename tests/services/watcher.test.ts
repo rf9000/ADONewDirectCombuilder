@@ -152,6 +152,25 @@ describe('runPollCycle', () => {
     expect(store.get(1)?.error).toContain('exceeded');
   });
 
+  test('a timed-out job records the phase it was in, so a retry resumes rather than re-plans', async () => {
+    // The job was mid-`implementing` when the timeout fired — processItem
+    // itself never gets to record `failedAtPhase` because it never returns.
+    store.update(1, { phase: 'implementing' });
+    const deps = makeDeps({
+      fetchItems: mock(() => Promise.resolve([mockWorkItem({ id: 1 })])),
+      processItem: mock(() => new Promise<ItemProcessResult>(() => undefined)),
+    });
+
+    const result = await runPollCycle(config({ jobTimeoutMinutes: 1 / 60 }), store, deps);
+
+    expect(result.errors).toBe(1);
+    expect(store.get(1)?.phase).toBe('failed');
+    // Without this, entry-phase.ts falls back to 'planning' with
+    // cleanWorkspace: true and the worktree — holding the partial implement —
+    // gets wiped on the very next retry.
+    expect(store.get(1)?.failedAtPhase).toBe('implementing');
+  });
+
   test('stops picking up new items once shutdown is requested', async () => {
     const items = [1, 2, 3].map((id) => mockWorkItem({ id }));
     const signal = { aborted: false };
