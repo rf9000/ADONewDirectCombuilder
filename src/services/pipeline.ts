@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type {
   AgentRunResult,
@@ -35,6 +35,8 @@ export interface PipelineDeps {
   addWorkItemComment: typeof ado.addWorkItemComment;
   swapWorkItemTags: typeof ado.swapWorkItemTags;
   createPullRequest: typeof ado.createPullRequest;
+  uploadAttachment: typeof ado.uploadAttachment;
+  linkAttachmentToWorkItem: typeof ado.linkAttachmentToWorkItem;
   createWorktree: typeof ws.createWorktree;
   removeAllWorktrees: typeof ws.removeAllWorktrees;
   wireSkills: typeof ws.wireSkills;
@@ -52,6 +54,8 @@ export const defaultDeps: PipelineDeps = {
   addWorkItemComment: ado.addWorkItemComment,
   swapWorkItemTags: ado.swapWorkItemTags,
   createPullRequest: ado.createPullRequest,
+  uploadAttachment: ado.uploadAttachment,
+  linkAttachmentToWorkItem: ado.linkAttachmentToWorkItem,
   createWorktree: ws.createWorktree,
   removeAllWorktrees: ws.removeAllWorktrees,
   wireSkills: ws.wireSkills,
@@ -629,6 +633,32 @@ export async function runJob(
 
     store.setPhase(item.id, 'done');
     store.save();
+
+    // The design doc is the most valuable output of a run — hours of
+    // adversarially-verified planning — and the worktree holding it is about
+    // to be deleted below, so put it somewhere durable and reviewable first.
+    // Missing is a silent skip, not a failure: an older job resumed past
+    // planning, or one whose doc was already cleaned up, must still publish.
+    // Wrapped in `.catch` so an upload hiccup can never fail a job whose PRs
+    // already exist — that outcome would be strictly worse than no attachment.
+    await (async () => {
+      const docPath = ctx.paths.designDocPath;
+      if (!existsSync(docPath)) return;
+      const uploaded = await deps.uploadAttachment(
+        config,
+        `${item.id}-design-doc.md`,
+        readFileSync(docPath, 'utf-8'),
+      );
+      await deps.linkAttachmentToWorkItem(
+        config,
+        item.id,
+        uploaded.url,
+        `${item.id}-design-doc.md`,
+        'Planning output for this change',
+      );
+    })().catch((err) => {
+      log(`  Item #${item.id}: could not attach the design doc — ${err}`);
+    });
 
     // ---- clean up the worktrees; the BC environment is deliberately left running ----
     await deps.removeAllWorktrees(config, item.id);

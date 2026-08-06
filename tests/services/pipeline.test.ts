@@ -148,6 +148,14 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
           }),
           'utf-8',
         );
+        // The real planner writes this too — artifacts.json only *names* it.
+        // Task 8's attach-on-success call site reads this file directly, so
+        // a fake that skipped it would make that call site's tests a no-op.
+        writeFileSync(
+          join(planDir, 'design-doc.md'),
+          '# AcmeBank design\n\nPlausible planning output for test purposes.',
+          'utf-8',
+        );
         // The real planner writes this too (pathsFor maps taskListPath here).
         // Task 5's dispatch gates entry at 'implementing' on this file's
         // presence, so a real planning run must leave it behind.
@@ -178,6 +186,8 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
       return JSON.parse(fs.readFileSync(path, 'utf-8'));
     },
     tailLog: () => '(log)',
+    uploadAttachment: mock(async () => ({ id: 'att-1', url: 'https://example/att-1' })),
+    linkAttachmentToWorkItem: mock(async () => undefined),
   } as unknown as PipelineDeps;
 }
 
@@ -195,6 +205,22 @@ function agentDirFor(itemId: number): string {
  */
 function seedArtifactsFor(phase: JobRecord['phase'], itemId: number): void {
   const agentDir = agentDirFor(itemId);
+
+  // A real job resumed at any phase after planning has a design doc on disk
+  // from its earlier planning run — planning already ran and wrote it before
+  // this run's entry point, even though the entry point itself does not
+  // require it (resolveEntryPhase's REQUIRES table has no design-doc
+  // precondition). Seed it here so a resumed job's disk state matches that,
+  // not just what the entered phase strictly needs.
+  if (phase === 'implementing' || phase === 'verifying' || phase === 'publishing') {
+    const planDir = join(agentDir, 'plan');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'design-doc.md'),
+      '# AcmeBank design\n\nSeeded for test — resumed past planning.',
+      'utf-8',
+    );
+  }
 
   if (phase === 'implementing') {
     const planDir = join(agentDir, 'plan');
@@ -697,6 +723,58 @@ describe('runJob — change summary hand-off', () => {
     expect(result.phase).toBe('done');
     const prCall = (deps.createPullRequest as ReturnType<typeof mock>).mock.calls[0]!;
     expect(JSON.stringify(prCall[2])).toContain('from artifact');
+  });
+});
+
+describe('runJob — design doc attachment', () => {
+  test('attaches the design doc to the work item on success', async () => {
+    const deps = makeDeps();
+    await runProcessItemAtPhase('publishing', deps);
+
+    expect(deps.uploadAttachment).toHaveBeenCalled();
+    const fileName = (deps.uploadAttachment as ReturnType<typeof mock>).mock.calls[0]?.[1];
+    expect(fileName).toContain('design-doc');
+    expect(deps.linkAttachmentToWorkItem).toHaveBeenCalled();
+  });
+
+  test('an attachment failure does not fail a job whose PRs exist', async () => {
+    const deps = makeDeps();
+    deps.uploadAttachment = mock(async () => {
+      throw new Error('upload exploded');
+    });
+    const result = await runProcessItemAtPhase('publishing', deps);
+    expect(result.phase).toBe('done');
+  });
+
+  test('a missing design doc is skipped silently, without failing the job', async () => {
+    const deps = makeDeps();
+    const item = mockWorkItem();
+
+    // Seed only what publishing itself requires (implement summary + a
+    // passing verify result) and deliberately leave out the design doc —
+    // unlike seedArtifactsFor, which always writes one. Covers a job whose
+    // planning round predates this feature, or whose doc was already
+    // cleaned up: publish must still succeed with nothing to attach.
+    const agentDir = agentDirFor(item.id);
+    mkdirSync(join(agentDir, 'implement'), { recursive: true });
+    writeFileSync(
+      join(agentDir, 'implement', 'summary.json'),
+      JSON.stringify({ summary: 'seeded for test' }),
+      'utf-8',
+    );
+    mkdirSync(join(agentDir, 'verify'), { recursive: true });
+    writeFileSync(
+      join(agentDir, 'verify', 'result.json'),
+      JSON.stringify(PASSING_VERIFY),
+      'utf-8',
+    );
+    store.update(item.id, { phase: 'publishing' });
+
+    const result = await runJob(config(), item, store, deps);
+
+    expect(result.phase).toBe('done');
+    expect(deps.uploadAttachment).not.toHaveBeenCalled();
+    expect(deps.linkAttachmentToWorkItem).not.toHaveBeenCalled();
   });
 });
 
