@@ -20,8 +20,11 @@ docker-compose.
 
 ## Key Patterns
 
-- **Phase machine** in `src/services/pipeline.ts`; every transition is persisted to the job record
-  so a container restart resumes rather than repeats
+- **Phase machine** in `src/services/pipeline.ts`; every transition is persisted, and
+  `resolveEntryPhase` walks backwards from the recorded phase to the first phase whose input
+  artifacts exist on disk, so a restart resumes rather than repeats. A job awaiting answers
+  re-plans in place; any other entry at `planning` — including one forced by a new human comment
+  since the plan — wipes an existing worktree first
 - **Dependency injection** via interfaces on all services (`PipelineDeps`, `WatcherDeps`,
   `ProcessorDeps`) so the whole pipeline is testable without network, git, or Claude
 - **JSON artifact handoff, not prose parsing** — each agent phase writes a known file
@@ -48,6 +51,9 @@ docker-compose.
 - Never leave credentials in `.git/config` — git auth goes through per-invocation
   `-c http.extraHeader`
 - Never stop or delete the BC environment during cleanup; only the worktrees are removed
+- Never delete a worktree on a failed run — the plan artifacts and any partial build stay there
+  so a retry can resume at `failedAtPhase`; `cleanup-worktrees <id>` is the only way to reclaim
+  that disk
 
 ## Commands
 

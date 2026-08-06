@@ -720,21 +720,25 @@ On test failure:
 
 # PHASE J — Probe the two unverified behaviours (steps 69–72)
 
-Neither is covered by unit tests, and I expect the first to disagree with the docs.
+Neither is covered by unit tests.
 
 ### 69. Restart mid-flight
 
-`CLAUDE.md` claims a restart "resumes rather than repeats", but `runJob` runs
-planning → implement → verify → publish unconditionally, regardless of stored phase. So a
-restart probably **re-plans from scratch**, reusing only the branch name and worktree.
+A restart resumes rather than repeats: `resolveEntryPhase` (`src/services/entry-phase.ts`) reads
+the job's recorded phase and which artifacts already exist on disk, and `runJob` runs forward
+from whatever it returns — it does not re-plan by default. Expect a job killed mid-implement to
+come back at `implementing`, not `planning`.
 
-During a planning run, once `questions.json` exists:
+Once `docker compose logs -f new-comm-builder` shows `Item #<WI>: implementing`, kill it before it
+finishes:
 
 ```bash
 docker compose restart new-comm-builder
 docker compose logs -f new-comm-builder
 ```
-- [ ] Record what actually happens: resume, or re-plan?
+- [ ] Log says `entering at implementing`, not `entering at planning`
+- [ ] The last `plan-N.log` gains no new `===== run started` block (no re-plan)
+- [ ] `implement.log` gains a new `===== run started` block (implement re-ran)
 
 ### 70. Job timeout orphan
 
