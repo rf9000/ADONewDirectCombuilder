@@ -472,6 +472,17 @@ export async function runJob(
     const hasNewComments =
       job.lastSeenCommentId > 0 && newestHumanCommentId > job.lastSeenCommentId;
 
+    // Whether a previous run left a worktree behind, captured *before*
+    // prepareWorkspaces creates or reuses one — after that call the answer
+    // is always yes, which would make this check useless. The job record's
+    // own `worktrees` field is not a substitute: `reset-item` deletes the
+    // whole record (state-store.ts's `remove`), so the very case this exists
+    // to catch — a stale directory surviving a reset — would report "nothing
+    // recorded" and never trigger the wipe.
+    const worktreeExisted = existsSync(
+      ws.worktreePath(config, config.repos.banking, item.id),
+    );
+
     let worktrees = await prepareWorkspaces(config, item, branch, deps);
 
     ctx = {
@@ -494,8 +505,7 @@ export async function runJob(
     };
 
     // `job` (fetched before this run touched anything) is what the resolver
-    // needs — the recorded phase, `failedAtPhase`, and (below) whether a
-    // worktree already exists here from an earlier run.
+    // needs — the recorded phase and `failedAtPhase`.
     const entry = resolveEntryPhase(job, inputs, hasNewComments);
     log(`  Item #${item.id}: entering at ${entry.phase} — ${entry.reason}`);
 
@@ -505,25 +515,15 @@ export async function runJob(
     // previous plan's design doc, task list and any half-built code that was
     // implemented against a now-superseded plan.
     //
-    // Only worth doing when a worktree from an earlier run is actually
-    // recorded on the job — a job that has never run has nothing to clean,
-    // and the unconditional `prepareWorkspaces` above already gave it an
-    // empty worktree.
-    if (entry.cleanWorkspace && Object.keys(job.worktrees ?? {}).length > 0) {
+    // Only worth doing when a worktree from an earlier run actually exists on
+    // disk — a job that has never run has nothing to clean, and the
+    // unconditional `prepareWorkspaces` above already gave it an empty one.
+    if (entry.cleanWorkspace && worktreeExisted) {
       await deps.removeAllWorktrees(config, item.id);
       worktrees = await prepareWorkspaces(config, item, branch, deps);
       ctx.worktrees = worktrees;
       ctx.paths = pathsFor(worktrees.banking);
     }
-
-    // Every transition is persisted, and that now includes which worktrees
-    // this job is using — a later invocation (a retry, a container restart,
-    // or the next clarify round within this same run) needs this recorded to
-    // know a worktree already exists here and must be wiped before a fresh
-    // plan is written into it.
-    store.update(item.id, {
-      worktrees: { banking: worktrees.banking, setupFiles: worktrees.setupFiles },
-    });
 
     // Run forward from the resolved entry point. The four phases stay in
     // their existing order; `runs` just says whether a given phase is at or

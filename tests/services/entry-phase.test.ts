@@ -21,9 +21,21 @@ describe('resolveEntryPhase', () => {
   });
 
   test('awaiting-answers re-plans — the clarify loop is unchanged', () => {
-    expect(resolveEntryPhase({ phase: 'awaiting-answers' }, all, false).phase).toBe(
-      'planning',
-    );
+    const d = resolveEntryPhase({ phase: 'awaiting-answers' }, all, false);
+    expect(d.phase).toBe('planning');
+    // It never reached implement, so there is no stale build to discard —
+    // and wiping would delete plan/questions.json, the follow-up context
+    // runPlanningPhase needs for round N's prompt.
+    expect(d.cleanWorkspace).toBe(false);
+  });
+
+  test('the clarify-loop exception survives a new comment', () => {
+    // The ordinary path through this loop *is* a new unmarked comment
+    // ("human answered, then re-triggered") — the exception has to win over
+    // the comment rule, or it is dead in exactly the case it exists for.
+    const d = resolveEntryPhase({ phase: 'awaiting-answers' }, all, true);
+    expect(d.phase).toBe('planning');
+    expect(d.cleanWorkspace).toBe(false);
   });
 
   test('resumes forward from a mid-flight phase', () => {

@@ -45,6 +45,23 @@ export function resolveEntryPhase(
   inputs: PhaseInputs,
   hasNewComments: boolean,
 ): EntryDecision {
+  // A job waiting on the human always re-plans in the existing worktree,
+  // never a wiped one: it never reached implement, so there is no stale
+  // build to discard, and wiping would delete plan/questions.json — the
+  // input runPlanningPhase reads to build the "this is a follow-up round"
+  // block. `hasNewComments` alone would get this wrong: the ordinary path
+  // through the clarify loop is "human answered the questions, then
+  // re-triggered", which *is* a new unmarked comment, so this has to be
+  // checked before the comment precondition below or the exception is dead
+  // in exactly the case it exists for.
+  if (job.phase === 'awaiting-answers') {
+    return {
+      phase: 'planning',
+      reason: 'resuming the clarify loop — re-plans in place, no build to discard',
+      cleanWorkspace: false,
+    };
+  }
+
   // A human answered something since we planned, so the plan is stale
   // regardless of how far the job had got.
   if (hasNewComments) {
@@ -62,7 +79,7 @@ export function resolveEntryPhase(
       wanted = job.failedAtPhase ?? 'planning';
       break;
     default:
-      // new, planning, awaiting-answers, done
+      // new, planning, done (awaiting-answers is handled above)
       wanted = 'planning';
   }
 

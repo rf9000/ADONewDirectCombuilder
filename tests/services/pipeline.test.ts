@@ -558,17 +558,17 @@ describe('runJob — dispatch', () => {
 
   test('entering at planning cleans the workspace first', async () => {
     const deps = makeDeps();
-    // Simulate a job that already ran once and has a recorded worktree — a
-    // job that has never run has nothing on disk to clean (prepareWorkspaces
-    // hands it an empty worktree either way), so the guard only fires when
-    // an earlier run's worktree is actually on record. This is the scenario
-    // reset-item and a resumed 'awaiting-answers' job produce.
-    await runProcessItemAtPhase('new', deps, {
-      worktrees: {
-        banking: join(root, 'worktrees', String(TEST_ITEM_ID), 'banking'),
-        setupFiles: join(root, 'worktrees', String(TEST_ITEM_ID), 'setupFiles'),
-      },
-    });
+    // The real scenario this guards against: reset-item deletes the whole
+    // job record (StateStore.remove), not just its phase, so the job record
+    // is no signal at all — the only thing that can still say "a previous
+    // run happened here" is whatever survived on disk. Simulate exactly
+    // that: a banking worktree directory with no job record backing it —
+    // store.ensure() inside runJob will hand back a brand-new 'new' record,
+    // same as it would the moment after a real reset-item.
+    mkdirSync(join(root, 'worktrees', String(TEST_ITEM_ID), 'banking'), { recursive: true });
+
+    await runJob(config(), mockWorkItem(), store, deps);
+
     // Once for the pre-dispatch wipe, once for the ordinary end-of-run
     // cleanup — proving the wipe is a genuine extra call, not just the
     // cleanup that already happens on every successful run.
@@ -609,14 +609,50 @@ describe('runJob — dispatch', () => {
     });
     expect(logFiles(deps).some((f) => f.includes('plan-'))).toBe(true);
   });
+
+  test('a failing verify read from disk still blocks the PR when entering directly at publishing', async () => {
+    const deps = makeDeps();
+    // Seed publishing's own prerequisites by hand (rather than through
+    // seedArtifactsFor, which always writes PASSING_VERIFY) so the
+    // verify/result.json entry actually reads back a failure — pinning the
+    // "no PR, push instead" outcome on the disk-read branch specifically,
+    // not on runVerifyPhase (which never runs on this path).
+    const agentDir = agentDirFor(TEST_ITEM_ID);
+    mkdirSync(join(agentDir, 'implement'), { recursive: true });
+    writeFileSync(
+      join(agentDir, 'implement', 'summary.json'),
+      JSON.stringify({ summary: 'seeded for test' }),
+      'utf-8',
+    );
+    mkdirSync(join(agentDir, 'verify'), { recursive: true });
+    writeFileSync(
+      join(agentDir, 'verify', 'result.json'),
+      JSON.stringify({ passed: false, summary: '3 tests failing', failedTests: ['TestX'] }),
+      'utf-8',
+    );
+    store.update(TEST_ITEM_ID, { phase: 'publishing' });
+
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('failed');
+    expect(result.error).toContain('TestX');
+    expect(deps.createPullRequest).not.toHaveBeenCalled();
+    // The work is still pushed so it is not lost, same as a verify that
+    // fails in-process.
+    expect(deps.commitAndPush).toHaveBeenCalled();
+  });
 });
 
 describe('runJob — change summary hand-off', () => {
   test('publish reads the change summary from the artifact, not an argument', async () => {
     const deps = makeDeps();
-    // implement's real write still happens; only the read is intercepted, so
-    // this proves publish goes through deps.readJsonArtifact for this path
-    // rather than an in-memory value carried over from implement.
+    // seedArtifactsFor pre-writes implement/summary.json and
+    // verify/result.json for 'publishing', so resolveEntryPhase lands
+    // directly at publish and implement never runs in this process at all.
+    // The intercepted read below is therefore the *only* way runPublishPhase
+    // can see a change summary — proving it goes through
+    // deps.readJsonArtifact rather than an in-memory value threaded from a
+    // (here, nonexistent) implement call.
     const real = deps.readJsonArtifact;
     deps.readJsonArtifact = mock((path: string) =>
       path.endsWith('summary.json') ? { summary: 'from artifact' } : real(path),
