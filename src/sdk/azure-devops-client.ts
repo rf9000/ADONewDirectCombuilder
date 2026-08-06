@@ -341,3 +341,55 @@ export function buildGitAuthArgs(config: AppConfig): string[] {
   const basic = Buffer.from(':' + config.pat).toString('base64');
   return ['-c', `http.extraHeader=Authorization: Basic ${basic}`];
 }
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+export interface UploadedAttachment {
+  id: string;
+  url: string;
+}
+
+/** Upload a file to the project's attachment store. Returns its id + url. */
+export async function uploadAttachment(
+  config: AppConfig,
+  fileName: string,
+  content: string | Buffer,
+): Promise<UploadedAttachment> {
+  const path = `wit/attachments?fileName=${encodeURIComponent(fileName)}&api-version=7.0`;
+  return adoFetchWithRetry<UploadedAttachment>(config, path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: content,
+  });
+}
+
+/**
+ * Link an uploaded attachment to a work item.
+ *
+ * `op: 'add'` on `/relations/-` appends to an array — real JSON Patch
+ * semantics. This is the opposite of `System.Tags`, where `add` merges with the
+ * existing value instead of replacing it. Do not "correct" this one to
+ * `replace`.
+ */
+export async function linkAttachmentToWorkItem(
+  config: AppConfig,
+  workItemId: number,
+  attachmentUrl: string,
+  name: string,
+  comment: string,
+): Promise<WorkItemResponse> {
+  const path = `wit/workitems/${workItemId}?api-version=7.0`;
+  return adoFetchWithRetry<WorkItemResponse>(config, path, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json-patch+json' },
+    body: JSON.stringify([
+      {
+        op: 'add',
+        path: '/relations/-',
+        value: { rel: 'AttachedFile', url: attachmentUrl, attributes: { name, comment } },
+      },
+    ]),
+  });
+}

@@ -19,6 +19,8 @@ import {
   createPullRequest,
   buildCloneUrl,
   buildGitAuthArgs,
+  uploadAttachment,
+  linkAttachmentToWorkItem,
 } from '../../src/sdk/azure-devops-client.ts';
 
 const originalFetch = globalThis.fetch;
@@ -517,6 +519,41 @@ describe('createPullRequest', () => {
     });
 
     expect(pr.url).toContain('_git/Continia%20Banking/pullrequest/7');
+  });
+});
+
+describe('attachments', () => {
+  test('uploadAttachment posts the file name in the query', async () => {
+    setMockFetch({ id: 'att-1', url: 'https://example/att-1' });
+    const result = await uploadAttachment(mockConfig(), 'design doc.md', 'body');
+
+    const url = mockFn.mock.calls[0]![0] as string;
+    expect(url).toContain('wit/attachments');
+    expect(url).toContain('fileName=design%20doc.md');
+    expect(result.url).toBe('https://example/att-1');
+  });
+
+  test('linkAttachmentToWorkItem appends a relation', async () => {
+    setMockFetch(mockWorkItem());
+    await linkAttachmentToWorkItem(
+      mockConfig(),
+      42,
+      'https://example/att-1',
+      'design-doc.md',
+      'Planning output',
+    );
+
+    const init = mockFn.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(init.body as string) as Array<{
+      op: string;
+      path: string;
+      value: { rel: string };
+    }>;
+    // `add` on /relations/- is an array append — genuine JSON Patch, unlike
+    // System.Tags where `add` merges. Do not "fix" this to replace.
+    expect(body[0]!.op).toBe('add');
+    expect(body[0]!.path).toBe('/relations/-');
+    expect(body[0]!.value.rel).toBe('AttachedFile');
   });
 });
 
