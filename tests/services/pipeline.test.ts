@@ -528,10 +528,11 @@ describe('runJob — failures', () => {
       throw new Error('kaboom');
     });
     await runProcessItemAtPhase('new', deps);
-    // Only the pre-dispatch clean for a fresh job — never a post-failure wipe.
-    expect(
-      (deps.removeAllWorktrees as ReturnType<typeof mock>).mock.calls.length,
-    ).toBeLessThanOrEqual(1);
+    // A brand-new job has no worktree on disk yet, so the pre-dispatch clean
+    // (gated on one already existing — pipeline.ts's `worktreeExisted`) never
+    // fires here either: zero calls is the only value a post-failure wipe
+    // could still hide behind, not a number that merely happens to work.
+    expect((deps.removeAllWorktrees as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
   });
 
   test('records the phase that failed', async () => {
