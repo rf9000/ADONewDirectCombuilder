@@ -695,7 +695,7 @@ export async function runJob(
     });
     store.save();
 
-    await reportFailure(config, item, message, deps).catch((reportErr) => {
+    await reportFailure(config, item, message, deps, store).catch((reportErr) => {
       log(`  Item #${item.id}: could not report failure — ${reportErr}`);
     });
 
@@ -759,6 +759,7 @@ async function reportFailure(
   item: WorkItemResponse,
   message: string,
   deps: PipelineDeps,
+  store: StateStore,
 ): Promise<void> {
   const tail = deps.tailLog(failedPhaseLog(config, item.id, deps), 25);
 
@@ -776,7 +777,22 @@ async function reportFailure(
       'on the host to reclaim the disk — the worktrees are kept so a retry can resume.',
   ].join('\n');
 
-  await deps.addWorkItemComment(config, item.id, comment);
+  const posted = await deps.addWorkItemComment(config, item.id, comment);
+
+  // Defence in depth, not a replacement for BOT_COMMENT_MARKER: the marker is
+  // stateless and survives a crash between posting and saving, but not a
+  // sanitiser that strips it before the next fetch — this comment is exactly
+  // the "own comment" case staleness detection (runJob's `hasNewComments`)
+  // has to keep ignoring. Bumping the watermark to the posted comment's own
+  // id survives that instead, so no single failure mode can make this
+  // comment look like new human input on a retry. Done before the tag swap
+  // below so it survives even if that call throws. Takes the max — never
+  // moves the watermark backwards.
+  store.update(item.id, {
+    lastSeenCommentId: Math.max(store.get(item.id)?.lastSeenCommentId ?? 0, posted.id),
+  });
+  store.save();
+
   await deps.swapWorkItemTags(
     config,
     item,

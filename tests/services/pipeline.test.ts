@@ -612,6 +612,75 @@ describe('runJob — failures', () => {
   });
 });
 
+describe('runJob — watermark bump on the failure comment', () => {
+  test('a marker-stripped failure comment does not force a re-plan on retry', async () => {
+    // First run fails at implement and posts the failure comment. The id the
+    // mock hands back is distinctive so the second half of this test cannot
+    // pass by coincidentally matching some other default.
+    const failingDeps = makeDeps({ failPhase: 'implement' });
+    failingDeps.addWorkItemComment = mock(() => Promise.resolve({ id: 77, text: '' }));
+
+    await runJob(config(), mockWorkItem(), store, failingDeps);
+    expect(store.get(TEST_ITEM_ID)?.phase).toBe('failed');
+    expect(store.get(TEST_ITEM_ID)?.failedAtPhase).toBe('implementing');
+
+    // Simulate Azure DevOps' HTML sanitiser stripping BOT_COMMENT_MARKER:
+    // the retry's fetch sees the same comment id back, but nothing in its
+    // text lets isBotComment recognise it as our own.
+    const retryDeps = makeDeps();
+    retryDeps.getWorkItemComments = mock(async () => [
+      { id: 77, text: 'Bank integration run failed' },
+    ]);
+
+    await runJob(config(), mockWorkItem(), store, retryDeps);
+
+    // Resumed at 'implementing' (no fresh plan-*.log) — only possible
+    // because the watermark bump, not the now-absent marker, kept this
+    // comment from looking like new human input.
+    const logFiles = (retryDeps.runAgent as ReturnType<typeof mock>).mock.calls.map(
+      (c) => (c[2] as { logFile?: string } | undefined)?.logFile ?? '',
+    );
+    expect(logFiles.some((f) => f.includes('plan-'))).toBe(false);
+  });
+
+  test('the bump never moves the watermark backwards', async () => {
+    const deps = makeDeps({ failPhase: 'implement' });
+    // A lower id than the job already has — should never happen for a real
+    // ADO comment id, but the bump must not trust that and must take the max.
+    deps.addWorkItemComment = mock(() => Promise.resolve({ id: 5, text: '' }));
+
+    await runProcessItemAtPhase('implementing', deps, {
+      lastSeenCommentId: 50,
+      plannerSessionId: 'sess-abc',
+    });
+
+    expect(store.get(TEST_ITEM_ID)?.lastSeenCommentId).toBe(50);
+  });
+
+  test('a genuine human comment newer than the bumped watermark still forces a re-plan', async () => {
+    const failingDeps = makeDeps({ failPhase: 'implement' });
+    failingDeps.addWorkItemComment = mock(() => Promise.resolve({ id: 77, text: '' }));
+
+    await runJob(config(), mockWorkItem(), store, failingDeps);
+
+    // The retry's fetch includes both the marker-stripped failure comment
+    // (id 77, matching the bump) and a genuinely newer human comment (id 80)
+    // that arrived after the failure — that one must still force a re-plan.
+    const retryDeps = makeDeps();
+    retryDeps.getWorkItemComments = mock(async () => [
+      { id: 77, text: 'Bank integration run failed' },
+      { id: 80, text: 'actually, use OAuth2 client credentials' },
+    ]);
+
+    await runJob(config(), mockWorkItem(), store, retryDeps);
+
+    const logFiles = (retryDeps.runAgent as ReturnType<typeof mock>).mock.calls.map(
+      (c) => (c[2] as { logFile?: string } | undefined)?.logFile ?? '',
+    );
+    expect(logFiles.some((f) => f.includes('plan-'))).toBe(true);
+  });
+});
+
 describe('runJob — dispatch', () => {
   /** `runAgent`'s `logFile` option, per call — the discriminator for which phase(s) ran. */
   function logFiles(deps: PipelineDeps): string[] {
