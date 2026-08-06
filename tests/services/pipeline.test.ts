@@ -499,7 +499,7 @@ describe('runJob — failures', () => {
     expect(deps.createPullRequest).not.toHaveBeenCalled();
   });
 
-  test('reports a failed agent run, tags the item, and cleans up', async () => {
+  test('reports a failed agent run, tags the item, and keeps the worktrees', async () => {
     const deps = makeDeps({ failPhase: 'implement' });
     const cfg = config();
 
@@ -511,13 +511,46 @@ describe('runJob — failures', () => {
 
     const swap = (deps.swapWorkItemTags as ReturnType<typeof mock>).mock.calls.at(-1)!;
     expect(swap[3]).toEqual([cfg.failedTag]);
-    expect(deps.removeAllWorktrees).toHaveBeenCalled();
+    // The plan artifacts and any partial build live in the worktrees, so a
+    // retry can resume at failedAtPhase instead of re-planning from scratch.
+    expect(deps.removeAllWorktrees).not.toHaveBeenCalled();
 
     // Marked so staleness detection does not mistake our own failure report
     // for a human comment on the next retry.
     const comment = (deps.addWorkItemComment as ReturnType<typeof mock>).mock
       .calls.at(-1)![2] as string;
     expect(comment).toContain(BOT_COMMENT_MARKER);
+  });
+
+  test('a failed job keeps its worktrees so a retry can resume', async () => {
+    const deps = makeDeps();
+    deps.runAgent = mock(async () => {
+      throw new Error('kaboom');
+    });
+    await runProcessItemAtPhase('new', deps);
+    // Only the pre-dispatch clean for a fresh job — never a post-failure wipe.
+    expect(
+      (deps.removeAllWorktrees as ReturnType<typeof mock>).mock.calls.length,
+    ).toBeLessThanOrEqual(1);
+  });
+
+  test('records the phase that failed', async () => {
+    const deps = makeDeps();
+    deps.runAgent = mock(async () => {
+      throw new Error('kaboom');
+    });
+    await runProcessItemAtPhase('implementing', deps);
+    expect(store.get(TEST_ITEM_ID)?.failedAtPhase).toBe('implementing');
+  });
+
+  test('the failure comment tells the human how to reclaim the disk', async () => {
+    const deps = makeDeps();
+    deps.runAgent = mock(async () => {
+      throw new Error('kaboom');
+    });
+    await runProcessItemAtPhase('new', deps);
+    const body = (deps.addWorkItemComment as ReturnType<typeof mock>).mock.calls.at(-1)?.[2];
+    expect(body).toContain('cleanup-worktrees');
   });
 
   test('a failed job is retried on the next poll', async () => {

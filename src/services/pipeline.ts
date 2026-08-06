@@ -641,17 +641,24 @@ export async function runJob(
     const message = err instanceof Error ? err.message : String(err);
     log(`  Item #${item.id}: failed — ${message}`);
 
-    store.update(item.id, { phase: 'failed', error: message });
+    // `store.get(item.id)?.phase` is read before this same `store.update`
+    // call overwrites it with 'failed' — the argument is evaluated first, so
+    // this captures the phase that actually threw. Splitting it into two
+    // statements would silently record 'failed' as the phase that failed.
+    store.update(item.id, {
+      phase: 'failed',
+      failedAtPhase: store.get(item.id)?.phase,
+      error: message,
+    });
     store.save();
 
     await reportFailure(config, item, message, deps).catch((reportErr) => {
       log(`  Item #${item.id}: could not report failure — ${reportErr}`);
     });
 
-    // Leave nothing behind: a retry re-clones from the current default branch.
-    await deps.removeAllWorktrees(config, item.id).catch(() => undefined);
-    store.update(item.id, { worktrees: {} });
-    store.save();
+    // Worktrees are deliberately kept: the plan artifacts and any partial build
+    // live in them, and a retry resumes at failedAtPhase rather than re-planning.
+    // `cleanup-worktrees <id>` reclaims the disk when a job is abandoned.
 
     return { itemId: item.id, processed: false, phase: 'failed', error: message };
   }
@@ -722,6 +729,8 @@ async function reportFailure(
     `<pre>${prompts.escapeHtml(tail)}</pre>`,
     '',
     `Fix the cause (or add a clarifying comment) and re-add the <code>${prompts.escapeHtml(config.triggerTag)}</code> tag to retry.`,
+    `If you do not intend to retry, run <code>docker compose run --rm new-comm-builder bun run src/cli/index.ts cleanup-worktrees ${item.id}</code> ` +
+      'on the host to reclaim the disk — the worktrees are kept so a retry can resume.',
   ].join('\n');
 
   await deps.addWorkItemComment(config, item.id, comment);
