@@ -295,16 +295,35 @@ Write \`${paths.verifyResultPath}\`:
 }
 
 /**
- * Hidden sentinel on every comment this pipeline posts.
+ * Hidden sentinel this pipeline prepends to every comment it posts.
  *
- * Staleness detection has to ignore our own comments, or every retry sees
- * "new comments" and resume never engages. Author is not usable as the
- * discriminator: `createdBy.uniqueName` is the PAT owner, who is also likely
- * to be the person answering, and it breaks outright once the agent gets its
- * own service account or several people take turns re-triggering a job.
+ * The intent: staleness detection has to ignore our own comments, or every
+ * retry sees "new comments" and resume never engages, and a marker sidesteps
+ * author-based filtering, which is unusable — `createdBy.uniqueName` is the
+ * PAT owner, who is also likely to be the person answering.
  *
- * `htmlToText` strips `<[^>]+>`, so this reaches neither the agent's prompt
- * nor the ADO comment editor.
+ * **It does not work.** Verified 2026-08-07 against work item 80969: posted
+ * a comment through `addWorkItemComment` and read it straight back with
+ * `getWorkItemComments` (the evidence comment is id 20930846). The marker
+ * was absent from both the POST response and the GET — Azure DevOps strips
+ * HTML comment nodes from work item comments server-side — while `<b>` and
+ * `<code>` in the same body survived untouched. So `isBotComment` below can
+ * never match in production; every comment this pipeline posts reads as
+ * human input to the staleness check that consults it.
+ *
+ * The feature works anyway, because of a mechanism added after this one:
+ * `reportFailure`'s caller (`pipeline.ts`, search `lastSeenCommentId: Math.max`)
+ * advances `job.lastSeenCommentId` to the id of the failure comment it just
+ * posted. That bump — not this marker — is what keeps the pipeline's own
+ * comments from looking like new human input on the next run; see that
+ * comment for why it covers every recorded phase staleness is ever consulted
+ * from.
+ *
+ * The marker is kept regardless: it costs nothing to keep posting, it is a
+ * correct filter if ADO's sanitiser behaviour ever changes, and the tests
+ * asserting our builders emit it are about our builders, not about ADO, so
+ * they still have value. Do not remove it or `isBotComment` on the strength
+ * of this comment.
  */
 export const BOT_COMMENT_MARKER = '<!-- new-comm-builder -->';
 

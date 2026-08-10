@@ -212,6 +212,11 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
   // never advance it, or the staleness check above would see its own
   // comments as new input on the very next run. Falls back to the existing
   // value when there are no unmarked comments at all.
+  //
+  // Belt-and-braces: ADO strips the marker (see BOT_COMMENT_MARKER in
+  // prompts.ts), so this filter cannot actually exclude anything today. The
+  // watermark bump in `reportFailure`'s caller does the real work for the
+  // failure comment; this phase posts nothing of its own before this point.
   const newestUnmarkedCommentId = ctx.comments
     .filter((c) => !prompts.isBotComment(c.text ?? ''))
     .reduce((max, c) => Math.max(max, c.id), job.lastSeenCommentId);
@@ -475,6 +480,11 @@ export async function runJob(
     // arrives after a failure. A brand-new job has no `plannerSessionId`
     // either, so the gate still suppresses the cosmetic "stale" log line for
     // the case it was written for.
+    //
+    // Belt-and-braces: ADO strips the marker (see BOT_COMMENT_MARKER in
+    // prompts.ts), so this filter cannot actually exclude anything today.
+    // The watermark bump in `reportFailure`'s caller is what keeps the
+    // failure comment from tripping `hasNewComments` on the next run.
     const newestHumanCommentId = comments
       .filter((c) => !prompts.isBotComment(c.text ?? ''))
       .reduce((max, c) => Math.max(max, c.id), 0);
@@ -779,15 +789,14 @@ async function reportFailure(
 
   const posted = await deps.addWorkItemComment(config, item.id, comment);
 
-  // Defence in depth, not a replacement for BOT_COMMENT_MARKER: the marker is
-  // stateless and survives a crash between posting and saving, but not a
-  // sanitiser that strips it before the next fetch — this comment is exactly
-  // the "own comment" case staleness detection (runJob's `hasNewComments`)
-  // has to keep ignoring. Bumping the watermark to the posted comment's own
-  // id survives that instead, so no single failure mode can make this
-  // comment look like new human input on a retry. Done before the tag swap
-  // below so it survives even if that call throws. Takes the max — never
-  // moves the watermark backwards.
+  // This is the mechanism, not a backup for BOT_COMMENT_MARKER: the marker
+  // it was meant to back up does not survive ADO (see the doc comment on
+  // BOT_COMMENT_MARKER in prompts.ts for the evidence). Bumping the
+  // watermark to the posted comment's own id is what actually keeps this
+  // comment from looking like new human input on a retry — the "own
+  // comment" case staleness detection (runJob's `hasNewComments`) has to
+  // keep ignoring. Done before the tag swap below so it survives even if
+  // that call throws. Takes the max — never moves the watermark backwards.
   store.update(item.id, {
     lastSeenCommentId: Math.max(store.get(item.id)?.lastSeenCommentId ?? 0, posted.id),
   });

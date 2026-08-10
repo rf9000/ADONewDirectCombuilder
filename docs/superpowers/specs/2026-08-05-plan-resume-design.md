@@ -99,6 +99,31 @@ into their own text, and that reply would then be ignored for staleness. Unlikel
 marker is invisible in the editor, so it would have to survive a copy-paste of raw HTML —
 and the cost is one missed re-plan, recoverable with `reset-item`.
 
+> **Correction, 2026-08-07:** the marker does not work. Verified against work item 80969
+> by posting a comment through `addWorkItemComment` and reading it straight back with
+> `getWorkItemComments` (evidence comment id 20930846): the marker was absent from both
+> the POST response and the GET, while `<b>` and `<code>` in the same body survived
+> untouched. Azure DevOps strips HTML comment nodes from work item comments server-side,
+> so `isBotComment` can never match in production and the "invisible in the ADO comment
+> editor" claim two paragraphs up, and the `htmlToText` claim below, are both moot — there
+> is nothing left for either to strip.
+>
+> The feature works anyway. `reportFailure`'s caller (`pipeline.ts`, around the failure
+> comment post) advances `job.lastSeenCommentId` to the id of the failure comment it just
+> posted, independently of the marker. That bump turns out to cover every phase staleness
+> is consulted from: `implementing`/`verifying`/`publishing` resume with nothing posted
+> since planning, `failed` resume is covered by the bump itself, and `awaiting-answers`
+> resolves to `planning` unconditionally, ahead of the comment rule. The watermark bump is
+> the mechanism; the marker is demoted to a no-op kept for the case ADO's sanitiser
+> behaviour changes. See the doc comment on `BOT_COMMENT_MARKER` in `prompts.ts` for the
+> full account.
+>
+> The rejection of author-based filtering directly above is *not* falsified by this — it
+> is independently confirmed. On work item 80969, all five comments on the thread,
+> including the bot's own three, are authored by the same person: the PAT owner, who is
+> also the person answering. That was a predicted failure mode when this section was
+> written; it is now an observed one on a live item.
+
 **Entering at `planning` means a clean workspace.** Whenever resolution lands on
 `planning` — new job, `reset-item`, `awaiting-answers`, a fallback downgrade, or the
 comment rule above — the worktrees are removed before `prepareWorkspaces` recreates them.
@@ -246,9 +271,13 @@ catch the mistake that makes the whole feature inert:
 - entering at `planning` calls `removeAllWorktrees` first; entering at `implementing` does
   not
 - a job whose only newer comments carry the marker resumes at `failedAtPhase` — it does
-  **not** re-plan
+  **not** re-plan (superseded per the 2026-08-07 correction above: in production ADO
+  strips the marker before this filter ever sees it, so it is the watermark bump that
+  makes this pass, not the marker; the test itself still holds because the mock never
+  simulates ADO's stripping)
 - every comment the pipeline posts contains the marker (assert on the builders in
-  `prompts.ts`, so a new comment type can't be added without one)
+  `prompts.ts`, so a new comment type can't be added without one — still true and still
+  worth asserting, since it is a claim about our builders, not about ADO)
 
 Existing tests assert today's behaviour — that failure removes worktrees — and will need
 inverting. That is the change being real, not an obstacle to route around.
