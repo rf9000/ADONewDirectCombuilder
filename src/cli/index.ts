@@ -26,6 +26,7 @@ Commands:
   reset-state          Clear all job state and exit
   reset-item <id>      Clear state for one work item so it runs from scratch
   cleanup-worktrees <id>  Remove the worktrees for one work item
+  reset-budget <id>    Zero the recorded spend for one work item (JOB_MAX_BUDGET_USD)
   help                 Show this help message
 
 Options:
@@ -106,6 +107,7 @@ switch (command) {
       const prs = job.prs.map((pr) => `!${pr.pullRequestId}`).join(' ');
       console.log(
         `  #${job.itemId}  ${job.phase.padEnd(17)} rounds=${job.clarifyRounds}` +
+          `  spent=$${(job.spentUsd ?? 0).toFixed(2)}/$${config.jobMaxBudgetUsd}` +
           `${job.branch ? `  ${job.branch}` : ''}${prs ? `  PRs: ${prs}` : ''}` +
           `${job.error ? `\n      error: ${job.error}` : ''}`,
       );
@@ -143,6 +145,23 @@ switch (command) {
       stateStore.save();
     }
     console.log(`Worktrees for #${itemId} removed`);
+    break;
+  }
+
+  case 'reset-budget': {
+    const itemId = requireItemId();
+    if (itemId === undefined) break;
+    const config = loadConfig();
+    const stateStore = new StateStore(config.stateDir);
+    const job = stateStore.get(itemId);
+    if (!job) {
+      console.log(`No state for #${itemId}`);
+      break;
+    }
+    const previous = job.spentUsd ?? 0;
+    stateStore.update(itemId, { spentUsd: 0 });
+    stateStore.save();
+    console.log(`Spend for #${itemId} reset (was $${previous.toFixed(2)})`);
     break;
   }
 

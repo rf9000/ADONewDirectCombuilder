@@ -19,6 +19,28 @@ describe("loadConfig", () => {
     expect(config.project).toBe("my-project");
   });
 
+  it("caps spend at $60 per agent run and $150 per job by default", () => {
+    const config = loadConfig(validEnv);
+    expect(config.agentMaxBudgetUsd).toBe(60);
+    expect(config.jobMaxBudgetUsd).toBe(150);
+  });
+
+  it("reads the spend caps from the environment", () => {
+    const config = loadConfig({
+      ...validEnv,
+      AGENT_MAX_BUDGET_USD: "12.5",
+      JOB_MAX_BUDGET_USD: "40",
+    });
+    expect(config.agentMaxBudgetUsd).toBe(12.5);
+    expect(config.jobMaxBudgetUsd).toBe(40);
+  });
+
+  it("rejects a non-positive spend cap", () => {
+    expect(() => loadConfig({ ...validEnv, JOB_MAX_BUDGET_USD: "0" })).toThrow(
+      "Invalid configuration",
+    );
+  });
+
   it("throws when AZURE_DEVOPS_PAT is missing", () => {
     const env = { ...validEnv };
     delete env.AZURE_DEVOPS_PAT;

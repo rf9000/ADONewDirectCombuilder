@@ -784,6 +784,7 @@ $S status                  # config + every tracked job
 $S reset-item <WI>         # forget one item so it runs from scratch
 $S reset-state             # forget everything
 $S cleanup-worktrees <WI>  # remove leftover worktrees
+$S reset-budget <WI>       # zero recorded spend after JOB_MAX_BUDGET_USD stopped a job
 ```
 
 Nuke the cache entirely, forcing a fresh seeded clone:

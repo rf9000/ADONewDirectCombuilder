@@ -168,6 +168,7 @@ depend on MCP — they go through the Azure DevOps REST client in `src/sdk/`.
 | `status` | Config summary plus every tracked job and its phase |
 | `reset-state` / `reset-item <id>` | Forget job state so an item runs from scratch |
 | `cleanup-worktrees <id>` | Remove leftover worktrees for a work item |
+| `reset-budget <id>` | Zero a work item's recorded spend so it can run again after hitting `JOB_MAX_BUDGET_USD` |
 
 Add `--dry-run` to `run-once` / `run-item` to read the work item and its comments and stop
 before any writes.

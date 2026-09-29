@@ -33,6 +33,12 @@ export interface AgentRunOptions {
   logFile: string;
   /** Override the configured turn cap for cheap phases. */
   maxTurns?: number;
+  /**
+   * Spend cap in USD for this run, passed to the SDK as `maxBudgetUsd`.
+   * Defaults to `config.agentMaxBudgetUsd`; the pipeline lowers it to what is
+   * left of the job's budget.
+   */
+  maxBudgetUsd?: number;
   /** Optional extra system prompt appended to the default Claude Code preset. */
   appendSystemPrompt?: string;
 }
@@ -152,6 +158,7 @@ export async function runAgent(
   let text = '';
   let sessionId: string | undefined;
   let success = false;
+  let subtype: string | undefined;
   let costUsd = 0;
   let numTurns = 0;
 
@@ -167,6 +174,7 @@ export async function runAgent(
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         maxTurns: options.maxTurns ?? config.agentMaxTurns,
+        maxBudgetUsd: options.maxBudgetUsd ?? config.agentMaxBudgetUsd,
         ...(Object.keys(mcpServers).length > 0
           ? { mcpServers: mcpServers as never }
           : {}),
@@ -209,18 +217,28 @@ export async function runAgent(
         }
       }
 
+      // One query can yield several results: background subagents wake the
+      // session up again after its first answer. `total_cost_usd` is the
+      // session's running total, not the cost of that result, so log the
+      // delta alongside it — summing the logged totals overstates the spend.
       if (message.type === 'result') {
         sessionId = message.session_id ?? sessionId;
-        costUsd = message.total_cost_usd ?? 0;
+        const total = message.total_cost_usd ?? costUsd;
+        const delta = total - costUsd;
+        costUsd = total;
         numTurns = message.num_turns ?? 0;
+        subtype = message.subtype;
         log(
-          `  Cost: $${costUsd.toFixed(4)} | ${message.usage?.input_tokens ?? 0} in / ${message.usage?.output_tokens ?? 0} out | ${numTurns} turns`,
+          `  Cost: +$${delta.toFixed(4)} (run total $${costUsd.toFixed(4)}) | ${message.usage?.input_tokens ?? 0} in / ${message.usage?.output_tokens ?? 0} out | ${numTurns} turns`,
         );
         write(`[result] subtype=${message.subtype} cost=$${costUsd.toFixed(4)} turns=${numTurns}`);
         if (message.subtype === 'success') {
           success = true;
           text = message.result;
         } else {
+          // A later non-success result (e.g. the budget ran out while a
+          // background subagent was still working) overrides an earlier success.
+          success = false;
           write(`[result] non-success subtype: ${message.subtype}`);
         }
       }
@@ -230,7 +248,7 @@ export async function runAgent(
     logStream.end();
   }
 
-  return { text: text.trim(), sessionId, success, costUsd, numTurns };
+  return { text: text.trim(), sessionId, success, subtype, costUsd, numTurns };
 }
 
 /**

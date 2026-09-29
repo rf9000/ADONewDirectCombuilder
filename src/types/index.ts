@@ -41,6 +41,10 @@ export interface AppConfig {
   // --- Claude ---
   claudeModel: string;
   agentMaxTurns: number;
+  /** Spend cap in USD for a single agent run (one phase). */
+  agentMaxBudgetUsd: number;
+  /** Spend cap in USD across every agent run a job has ever made. */
+  jobMaxBudgetUsd: number;
 
   // --- Repositories ---
   repos: {
@@ -149,6 +153,12 @@ export interface JobRecord {
    * re-planning from scratch.
    */
   failedAtPhase?: JobPhase;
+  /**
+   * Total USD spent on agent runs for this job, across every phase, round and
+   * retry. Checked against `jobMaxBudgetUsd` before each agent run; only
+   * `reset-budget <id>` (or `reset-item`) sets it back to zero.
+   */
+  spentUsd?: number;
   updatedAt: string;
 }
 
@@ -174,6 +184,8 @@ export interface AgentRunResult {
   sessionId?: string;
   /** True when the SDK reported subtype 'success'. */
   success: boolean;
+  /** SDK result subtype of the last result, e.g. 'error_max_budget_usd'. */
+  subtype?: string;
   costUsd: number;
   numTurns: number;
 }

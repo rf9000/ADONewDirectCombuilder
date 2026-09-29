@@ -612,6 +612,81 @@ describe('runJob — failures', () => {
   });
 });
 
+describe('runJob — spend caps', () => {
+  const budgets = (deps: PipelineDeps) =>
+    (deps.runAgent as ReturnType<typeof mock>).mock.calls.map(
+      (call) => (call[2] as { maxBudgetUsd?: number }).maxBudgetUsd,
+    );
+
+  test('records the spend of every agent run on the job', async () => {
+    // The fake agent reports $0.50 per run: plan + implement + verify.
+    await runJob(config({ skipBuildTest: false }), mockWorkItem(), store, makeDeps());
+    expect(store.get(42)?.spentUsd).toBeCloseTo(1.5);
+  });
+
+  test('passes the per-run cap to the agent while the job has budget to spare', async () => {
+    const deps = makeDeps();
+    await runJob(
+      config({ agentMaxBudgetUsd: 60, jobMaxBudgetUsd: 150 }),
+      mockWorkItem(),
+      store,
+      deps,
+    );
+    expect(budgets(deps)[0]).toBe(60);
+  });
+
+  test('lowers the run cap to what is left of the job budget', async () => {
+    store.update(42, { spentUsd: 140 });
+    const deps = makeDeps();
+    await runJob(
+      config({ agentMaxBudgetUsd: 60, jobMaxBudgetUsd: 150 }),
+      mockWorkItem(),
+      store,
+      deps,
+    );
+    expect(budgets(deps)[0]).toBeCloseTo(10);
+  });
+
+  test('an exhausted job budget fails before starting the agent', async () => {
+    store.update(42, { spentUsd: 150 });
+    const deps = makeDeps();
+
+    const result = await runJob(config({ jobMaxBudgetUsd: 150 }), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('failed');
+    expect(result.error).toContain('Job budget exhausted');
+    expect(result.error).toContain('reset-budget 42');
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  test('a run stopped at its cap fails with the cap in the message and still counts', async () => {
+    const deps = makeDeps();
+    deps.runAgent = mock(async () => ({
+      text: '',
+      success: false,
+      subtype: 'error_max_budget_usd',
+      costUsd: 61.2,
+      numTurns: 20,
+    }));
+
+    const result = await runJob(config({ agentMaxBudgetUsd: 60 }), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('failed');
+    expect(result.error).toContain('spend cap');
+    expect(result.error).toContain('AGENT_MAX_BUDGET_USD');
+    expect(store.get(42)?.spentUsd).toBeCloseTo(61.2);
+    // Same rule as any failure: the worktrees stay so a retry can resume.
+    expect(deps.removeAllWorktrees).not.toHaveBeenCalled();
+  });
+
+  test('spend accumulates across retries', async () => {
+    await runJob(config(), mockWorkItem(), store, makeDeps({ failPhase: 'plan' }));
+    await runJob(config(), mockWorkItem(), store, makeDeps());
+    // Failed plan ($0) + plan + implement ($0.50 each); verify skipped.
+    expect(store.get(42)?.spentUsd).toBeCloseTo(1);
+  });
+});
+
 describe('runJob — watermark bump on the failure comment', () => {
   test('a marker-stripped failure comment does not force a re-plan on retry', async () => {
     // First run fails at implement and posts the failure comment. The id the

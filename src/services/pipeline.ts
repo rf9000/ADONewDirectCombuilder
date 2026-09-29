@@ -151,10 +151,68 @@ async function prepareWorkspaces(
   return { banking, setupFiles };
 }
 
-function assertAgentSucceeded(result: AgentRunResult, phase: string): void {
-  if (!result.success) {
-    throw new Error(`Agent run for phase '${phase}' did not complete successfully`);
+function assertAgentSucceeded(
+  config: AppConfig,
+  result: AgentRunResult,
+  phase: string,
+  budgetUsd: number,
+): void {
+  if (result.success) return;
+  if (result.subtype === 'error_max_budget_usd') {
+    throw new Error(
+      `Agent run for phase '${phase}' was stopped at its $${budgetUsd.toFixed(2)} spend cap ` +
+        `after $${result.costUsd.toFixed(2)}. Raise AGENT_MAX_BUDGET_USD ` +
+        `(now $${config.agentMaxBudgetUsd}) or JOB_MAX_BUDGET_USD ` +
+        `(now $${config.jobMaxBudgetUsd}) if this spend is expected.`,
+    );
   }
+  throw new Error(`Agent run for phase '${phase}' did not complete successfully`);
+}
+
+/**
+ * Run one phase's agent under the job's spend cap.
+ *
+ * The run's own cap is the smaller of the per-run cap and what is left of the
+ * job's budget, so a job cannot overshoot its total by more than the SDK's
+ * between-turn check allows. Spend is recorded before the success check so a
+ * failed or budget-stopped run still counts against the job.
+ */
+async function runPhaseAgent(
+  ctx: PhaseContext,
+  phase: string,
+  prompt: string,
+  logFile: string,
+): Promise<AgentRunResult> {
+  const { config, item, store, deps } = ctx;
+  const spent = store.get(item.id)?.spentUsd ?? 0;
+  const remaining = config.jobMaxBudgetUsd - spent;
+
+  if (remaining <= 0) {
+    throw new Error(
+      `Job budget exhausted: $${spent.toFixed(2)} of $${config.jobMaxBudgetUsd} already spent, ` +
+        `so the '${phase}' phase was not started. Raise JOB_MAX_BUDGET_USD or run ` +
+        `\`reset-budget ${item.id}\` to allow more spend on this work item.`,
+    );
+  }
+
+  const budgetUsd = Math.min(config.agentMaxBudgetUsd, remaining);
+  const result = await deps.runAgent(config, prompt, {
+    cwd: ctx.worktrees.banking,
+    additionalDirectories: [ctx.worktrees.setupFiles],
+    logFile,
+    maxBudgetUsd: budgetUsd,
+  });
+
+  const total = spent + result.costUsd;
+  store.update(item.id, { spentUsd: total });
+  store.save();
+  log(
+    `  Item #${item.id}: ${phase} cost $${result.costUsd.toFixed(2)} — ` +
+      `job total $${total.toFixed(2)} of $${config.jobMaxBudgetUsd}`,
+  );
+
+  assertAgentSucceeded(config, result, phase, budgetUsd);
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -193,12 +251,12 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
     job.clarifyRounds > 0 ? previousQuestions : undefined,
   );
 
-  const result = await deps.runAgent(config, prompt, {
-    cwd: ctx.worktrees.banking,
-    additionalDirectories: [ctx.worktrees.setupFiles],
-    logFile: logPath(config, item.id, `plan-${job.clarifyRounds + 1}`),
-  });
-  assertAgentSucceeded(result, 'planning');
+  const result = await runPhaseAgent(
+    ctx,
+    'planning',
+    prompt,
+    logPath(config, item.id, `plan-${job.clarifyRounds + 1}`),
+  );
 
   const artifacts = deps.readJsonArtifact<PlanArtifacts>(paths.artifactsPath);
   const questions =
@@ -278,12 +336,12 @@ export async function runImplementPhase(ctx: PhaseContext): Promise<string> {
     ctx.worktrees.setupFiles,
   );
 
-  const result = await deps.runAgent(config, prompt, {
-    cwd: ctx.worktrees.banking,
-    additionalDirectories: [ctx.worktrees.setupFiles],
-    logFile: logPath(config, item.id, 'implement'),
-  });
-  assertAgentSucceeded(result, 'implementing');
+  const result = await runPhaseAgent(
+    ctx,
+    'implementing',
+    prompt,
+    logPath(config, item.id, 'implement'),
+  );
 
   // Written as an artifact, not just returned, so publish can read it even
   // when it is entered directly rather than falling through from implement.
@@ -313,12 +371,7 @@ export async function runVerifyPhase(ctx: PhaseContext): Promise<VerifyResult> {
 
   const prompt = prompts.buildVerifyPrompt(config, paths, ctx.worktrees.banking);
 
-  const result = await deps.runAgent(config, prompt, {
-    cwd: ctx.worktrees.banking,
-    additionalDirectories: [ctx.worktrees.setupFiles],
-    logFile: logPath(config, item.id, 'verify'),
-  });
-  assertAgentSucceeded(result, 'verifying');
+  await runPhaseAgent(ctx, 'verifying', prompt, logPath(config, item.id, 'verify'));
 
   const verify = deps.readJsonArtifact<VerifyResult>(paths.verifyResultPath);
   if (!verify) {

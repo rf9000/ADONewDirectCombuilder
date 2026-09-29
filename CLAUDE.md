@@ -40,6 +40,11 @@ docker-compose.
   deliberately does not mount the host `~/.claude`: it carries its own `ANTHROPIC_API_KEY` so
   spend stays attributable, and bakes skills into the image so the pipeline's artifact contracts
   are version-pinned rather than changing under it when a shared skill is edited
+- **Spend caps** — every agent run goes through `runPhaseAgent`, which passes
+  `min(AGENT_MAX_BUDGET_USD, what is left of JOB_MAX_BUDGET_USD)` to the SDK as `maxBudgetUsd`
+  and adds the run's cost to the job's `spentUsd`. `total_cost_usd` is a running total per
+  query (one query can yield several results when background subagents wake it), so never sum
+  the logged values. A job over its cap fails before the next run; `reset-budget <id>` clears it
 - **Serialized jobs** — one at a time; BC cannot run concurrent test jobs on one environment
 - **Tag-swap handshake** — the bot swaps the trigger tag for a waiting tag when it needs answers;
   re-adding the trigger tag resumes the job

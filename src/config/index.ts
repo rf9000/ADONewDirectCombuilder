@@ -50,6 +50,12 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required"),
   CLAUDE_MODEL: z.string().default("claude-opus-5"),
   AGENT_MAX_TURNS: z.coerce.number().int().positive().default(400),
+  // Turns do not track cost — one planning run fanned out to subagents and
+  // spent ~$50 in 32 turns — so spend is capped in dollars as well. The
+  // per-run cap goes to the SDK as `maxBudgetUsd`; the per-job cap is
+  // cumulative across rounds and retries and is enforced by the pipeline.
+  AGENT_MAX_BUDGET_USD: z.coerce.number().positive().default(60),
+  JOB_MAX_BUDGET_USD: z.coerce.number().positive().default(150),
 
   // --- Repositories ---
   BANKING_REPO_NAME: z.string().default("Continia Banking"),
@@ -130,6 +136,8 @@ export function loadConfig(
 
     claudeModel: parsed.CLAUDE_MODEL,
     agentMaxTurns: parsed.AGENT_MAX_TURNS,
+    agentMaxBudgetUsd: parsed.AGENT_MAX_BUDGET_USD,
+    jobMaxBudgetUsd: parsed.JOB_MAX_BUDGET_USD,
 
     repos: {
       banking: {
