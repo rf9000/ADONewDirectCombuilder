@@ -232,6 +232,10 @@ decision, and config change made (or "none").
 - An LLM judge can be wrong. Its scores rank; the human reads the gaps before deciding.
 - Freezing the linked API docs appends a short section to the prompt that production does not
   have. This is a small, deliberate difference that buys identical inputs.
+- Experiment agent runs (planner and judge) load no MCP servers. This repo's `.mcp.json` holds
+  an ADO PAT, and an agent with the ADO MCP server could write to the real work item, which
+  would break the "no ADO writes" guarantee. Planning gets the work item inline, so this should
+  not change plan quality; the report states the difference.
 - v1 has no `--repeat`, so every finding rests on one sample per variant until repeats land.
 - v1 stops at the first rate-limit rejection; a long sweep on subscription auth may need to be
   split with `--only` across sessions until sleep-and-retry lands. When it does, a variant that
