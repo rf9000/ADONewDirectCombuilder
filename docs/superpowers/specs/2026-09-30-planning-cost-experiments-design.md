@@ -24,6 +24,18 @@ before any production config changes — and capture token and USD cost per mode
   wins); per-role subagent models via SDK `agents` definitions (only if data points there).
 - **Production behaviour does not change**, except one extra per-model usage log line per run.
 
+### v1 is lean
+
+v1 builds only what is needed to get real numbers from one work item: freeze input, run the
+variants sequentially, capture per-model cost, judge, report. Any rate-limit rejection stops the
+sweep and writes a partial report. Deferred until the harness has proven useful — each is marked
+**(later)** where it appears below:
+
+- `--repeat N` and the repeat statistics / noise warning
+- `--resume <runId>`
+- sleep-until-reset on five-hour limits and re-running the variant
+- the preflight query and `--force`
+
 ## Design
 
 ### 1. Folder layout
@@ -118,16 +130,18 @@ so experiment worktrees can be pinned to frozen SHAs.
 
 ### 4. Experiment flow
 
-`bun run experiment plan <workItemId> [--variants <file>] [--only a,b] [--repeat N]
-[--answers <file>] [--questions <file>] [--resume <runId>] [--auth subscription|api-key] [--force]`
+`bun run experiment plan <workItemId> [--variants <file>] [--only a,b]
+[--answers <file>] [--questions <file>] [--auth subscription|api-key]`
+
+(later: `--repeat N`, `--resume <runId>`, `--force`)
 
 New module `src/services/experiment.ts` (pure orchestration, dependencies injected like the
 pipeline) plus a report module `src/services/experiment-report.ts`.
 
-1. **Preflight.** One tiny Haiku query confirms the auth mode actually in use and reads current
-   rate-limit utilization. Wrong auth aborts. With subscription auth, utilization above 80% on
-   any window warns and requires `--force`.
-2. **Freeze input** (skipped with `--resume`, which reuses the run's `input.json`):
+1. **Preflight (later).** One tiny Haiku query confirms the auth mode actually in use and reads
+   current rate-limit utilization. Wrong auth aborts. With subscription auth, utilization above
+   80% on any window warns and requires `--force`. v1 only logs the auth mode it selected.
+2. **Freeze input** (later: skipped with `--resume`, which reuses the run's `input.json`):
    - Read-only fetch of the work item and comments; build the context with the existing
      `buildWorkItemContext`.
    - Download every `http(s)` link in the description that looks like an API doc (`.json`,
@@ -140,8 +154,8 @@ pipeline) plus a report module `src/services/experiment-report.ts`.
      `plan/questions.json`) makes this a follow-up round: `clarifyRounds = 1` and the file is
      passed as `previousQuestions`, matching the production follow-up prompt.
    - Record the current `origin/<defaultBranch>` SHA of both repos.
-3. **Per variant × repeat** (sequential; skipped when `usage.json` already exists under
-   `--resume`):
+3. **Per variant** (sequential; later: × repeat, and skipped when `usage.json` already exists
+   under `--resume`):
    - Fresh worktree pair at the frozen SHAs; skills wired and git excludes added as in
      production.
    - `PhaseContext` with an in-memory `StateStore`, `jobMaxBudgetUsd` set to what is left of
@@ -180,10 +194,11 @@ pipeline) plus a report module `src/services/experiment-report.ts`.
 - USD figures are the SDK's computed cost at API list price whatever the auth is. The report
   labels them **API-equivalent USD** — the number production would pay.
 - Rate limits, from `rate_limit_event`:
-  - `five_hour` rejected: log, sleep until `resetsAt` + 2 min, re-run the variant from scratch.
-    The partial run's cost is recorded as wasted.
-  - any `seven_day*` rejected: stop the sweep and write a partial report. `--resume` continues
-    later.
+  - v1: any rejection marks the variant `rate-limited` (not `failed`), stops the sweep and
+    writes a partial report naming the limit type and `resetsAt`.
+  - later: `five_hour` rejected sleeps until `resetsAt` + 2 min and re-runs the variant from
+    scratch, recording the partial run's cost as wasted; `seven_day*` still stops, and
+    `--resume` continues.
 - Before relying on subscription auth for large sweeps, confirm the Team plan terms allow
   scripted Agent SDK use on a seat. This is an open question, not a settled fact.
 
@@ -200,8 +215,8 @@ pipeline) plus a report module `src/services/experiment-report.ts`.
 - Gaps per variant: the judge's concrete items.
 - **Cheapest good-enough:** the cheapest variant with verdict `equivalent` or `better` and no
   score below 4. A suggestion; the human decides.
-- With `--repeat N`: mean and min–max per metric, and a noise warning when repeats of one
-  variant disagree on the verdict.
+- (later) With `--repeat N`: mean and min–max per metric, and a noise warning when repeats of
+  one variant disagree on the verdict.
 - A warning when any variant stopped at `questions.json` without a design doc, since then only
   questions were compared.
 
@@ -217,8 +232,11 @@ decision, and config change made (or "none").
 - An LLM judge can be wrong. Its scores rank; the human reads the gaps before deciding.
 - Freezing the linked API docs appends a short section to the prompt that production does not
   have. This is a small, deliberate difference that buys identical inputs.
-- A variant that hits a five-hour limit is re-run from scratch rather than resumed, because
-  resuming a half-finished planner session would not be comparable.
+- v1 has no `--repeat`, so every finding rests on one sample per variant until repeats land.
+- v1 stops at the first rate-limit rejection; a long sweep on subscription auth may need to be
+  split with `--only` across sessions until sleep-and-retry lands. When it does, a variant that
+  hits a five-hour limit is re-run from scratch rather than resumed, because resuming a
+  half-finished planner session would not be comparable.
 
 ## Testing
 
@@ -228,12 +246,12 @@ decision, and config change made (or "none").
   injectable for this.
 - `config`: variant schema accepts the example, rejects an unknown `baseline`, warns on
   Haiku + effort; `ANTHROPIC_API_KEY` is optional only in subscription mode.
-- `experiment`: with fake deps — input is frozen once and reused on `--resume`; completed
-  variants are skipped; ADO write stubs throw when called; the budget passed down shrinks as
-  variants spend; a five-hour rejection waits and re-runs, a seven-day rejection stops with a
-  partial report; `--answers` becomes a comment and `--questions` sets `clarifyRounds = 1`.
-- `experiment-report`: table ordering, % of baseline, cheapest good-enough selection, repeat
-  aggregation, questions-only warning.
+- `experiment`: with fake deps — input is frozen once and every variant receives the same
+  context and SHAs; `--only` filters variants; ADO write stubs throw when called; the budget
+  passed down shrinks as variants spend; a rate-limit rejection stops the sweep with a partial
+  report; `--answers` becomes a comment and `--questions` sets `clarifyRounds = 1`.
+- `experiment-report`: table ordering, % of baseline, cheapest good-enough selection,
+  questions-only warning, partial-report header.
 - `pipeline`: `agentOverrides` is forwarded; unset in production paths.
 - Manual: one real two-variant run on work item 83634 with `--only opus-high,opus-haiku-subs`,
   checking that per-model costs sum to `total_cost_usd`.
