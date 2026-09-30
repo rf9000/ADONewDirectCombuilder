@@ -47,7 +47,9 @@ const envSchema = z.object({
   // Each bot in the stack carries its own key so spend stays attributable. The
   // Agent SDK reads it from the environment itself, but it is validated here so
   // a missing key fails on boot rather than mid-run inside the first phase.
-  ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required"),
+  // Required for the watcher; the local experiment command may run on the
+  // developer's Claude login instead, so the check lives in loadConfig.
+  ANTHROPIC_API_KEY: z.string().default(""),
   CLAUDE_MODEL: z.string().default("claude-opus-5"),
   AGENT_MAX_TURNS: z.coerce.number().int().positive().default(400),
   // Turns do not track cost — one planning run fanned out to subagents and
@@ -93,6 +95,7 @@ const envSchema = z.object({
 
 export function loadConfig(
   env: Record<string, string | undefined> = process.env,
+  options: { requireApiKey?: boolean } = {},
 ): AppConfig {
   const result = envSchema.safeParse(env);
 
@@ -104,6 +107,12 @@ export function loadConfig(
   }
 
   const parsed = result.data;
+
+  if ((options.requireApiKey ?? true) && parsed.ANTHROPIC_API_KEY.trim() === "") {
+    throw new Error(
+      "Invalid configuration:\n  - ANTHROPIC_API_KEY: ANTHROPIC_API_KEY is required",
+    );
+  }
 
   // The verify phase drives the Continia CLI, and a missing token would only
   // surface there — after a full plan and implement had already run.

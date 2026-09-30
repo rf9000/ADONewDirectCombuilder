@@ -67,6 +67,12 @@ describe("loadConfig", () => {
     expect(() => loadConfig(env)).toThrow("ANTHROPIC_API_KEY");
   });
 
+  it("accepts a missing ANTHROPIC_API_KEY when the caller opts out", () => {
+    const env = { ...validEnv };
+    delete env.ANTHROPIC_API_KEY;
+    expect(() => loadConfig(env, { requireApiKey: false })).not.toThrow();
+  });
+
   it("rejects a blank ANTHROPIC_API_KEY", () => {
     expect(() => loadConfig({ ...validEnv, ANTHROPIC_API_KEY: "" })).toThrow(
       "ANTHROPIC_API_KEY is required",
