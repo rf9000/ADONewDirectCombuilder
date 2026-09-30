@@ -220,6 +220,12 @@ export async function runAgent(
         additionalDirectories: options.additionalDirectories,
         settingSources: ['project'],
         allowedTools,
+        // allowedTools only auto-approves; under bypassPermissions every other
+        // tool still runs. A restricted caller needs `tools` to actually limit
+        // them, and strictMcpConfig so the CLI cannot find a project .mcp.json
+        // on its own.
+        ...(options.allowedTools ? { tools: options.allowedTools } : {}),
+        ...(useMcp ? {} : { strictMcpConfig: true }),
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         maxTurns: options.maxTurns ?? config.agentMaxTurns,
@@ -316,6 +322,15 @@ export async function runAgent(
         }
       }
     }
+  } catch (err) {
+    // After a non-success result the SDK throws "Claude Code returned an error
+    // result" instead of ending the stream. The result already carried the
+    // cost, subtype and rate-limit state, and callers need them — a
+    // budget-stopped run must still count against the budget. Only a failure
+    // before any result is a real error.
+    if (subtype === undefined) throw err;
+    success = false;
+    write(`[error] ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     for (const line of formatModelUsage(modelUsage ?? {})) {
       log(`  ${line}`);

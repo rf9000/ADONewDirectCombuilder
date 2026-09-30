@@ -360,3 +360,83 @@ describe('runAgent with an injected query', () => {
     expect(res.assistantError).toBe('rate_limit');
   });
 });
+
+describe('runAgent hardening', () => {
+  function result(subtype: string, total: number) {
+    return {
+      type: 'result',
+      subtype,
+      result: 'x',
+      session_id: 's1',
+      total_cost_usd: total,
+      num_turns: 2,
+      duration_ms: 10,
+      usage: { input_tokens: 1, output_tokens: 1 },
+      modelUsage: {},
+    };
+  }
+
+  function throwingQuery(messages: unknown[], seen: { params?: any } = {}) {
+    return ((params: unknown) => {
+      seen.params = params;
+      return (async function* () {
+        for (const m of messages) yield m;
+        throw new Error('Claude Code returned an error result: budget');
+      })();
+    }) as never;
+  }
+
+  test('returns the gathered result when the SDK throws after an error result', async () => {
+    const res = await runAgent(
+      mockConfig(),
+      'hi',
+      { cwd: dir, logFile: join(dir, 'run.log') },
+      throwingQuery([
+        { type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour' } },
+        result('error_max_budget_usd', 12.5),
+      ]),
+    );
+    expect(res).toMatchObject({ success: false, subtype: 'error_max_budget_usd', costUsd: 12.5 });
+    expect(res.rateLimit?.status).toBe('rejected');
+  });
+
+  test('still throws when the SDK fails before any result', async () => {
+    await expect(
+      runAgent(mockConfig(), 'hi', { cwd: dir, logFile: join(dir, 'run.log') }, throwingQuery([])),
+    ).rejects.toThrow('returned an error result');
+  });
+
+  test('restricts the available tools and ignores other MCP configs when tools are restricted', async () => {
+    const seen: { params?: any } = {};
+    await runAgent(
+      mockConfig(),
+      'hi',
+      { cwd: dir, logFile: join(dir, 'run.log'), allowedTools: ['Read', 'Write'] },
+      ((params: unknown) => {
+        seen.params = params;
+        return (async function* () {
+          yield result('success', 1);
+        })();
+      }) as never,
+    );
+    expect(seen.params.options.tools).toEqual(['Read', 'Write']);
+    expect(seen.params.options.strictMcpConfig).toBe(true);
+  });
+
+  test('leaves tools and strictMcpConfig unset in production', async () => {
+    const seen: { params?: any } = {};
+    await runAgent(
+      mockConfig(),
+      'hi',
+      { cwd: dir, logFile: join(dir, 'run.log') },
+      ((params: unknown) => {
+        seen.params = params;
+        return (async function* () {
+          yield result('success', 1);
+        })();
+      }) as never,
+    );
+    expect(seen.params.options.tools).toBeUndefined();
+    expect(seen.params.options.strictMcpConfig).toBeUndefined();
+  });
+});

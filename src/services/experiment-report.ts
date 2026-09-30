@@ -27,6 +27,8 @@ export interface VariantUsage {
   taskCount?: number;
   designDoc: boolean;
   rateLimit?: RateLimitInfo;
+  /** Where this variant's worktrees live; the name is opaque so the judge cannot tell. */
+  worktreeRoot?: string;
 }
 
 export interface ExperimentResults {

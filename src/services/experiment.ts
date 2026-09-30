@@ -1,4 +1,6 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { randomBytes } from 'crypto';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import type { AgentRunResult, AppConfig, AuthMode, PlanQuestions } from '../types/index.ts';
 import { StateStore } from '../state/state-store.ts';
@@ -86,17 +88,44 @@ export function formatRunId(date: Date): string {
 }
 
 /**
- * Child environment for the chosen auth. Without an API key in its env, the
- * Claude Code binary falls back to the logged-in ~/.claude credentials. Bun
- * loads .env into process.env, so the key has to be removed explicitly.
+ * Child environment for an experiment agent.
+ *
+ * Subscription auth removes the Anthropic key: without one, the Claude Code
+ * binary falls back to the logged-in ~/.claude credentials. Bun loads .env into
+ * process.env, so the key has to be removed explicitly.
+ *
+ * Either way the agent gets no ADO credentials and git cannot find any: it has
+ * Bash, and blocking our own commitAndPush means nothing if the agent can
+ * `git push` through the PAT or the machine's credential manager. A stray
+ * CLAUDE_CODE_SUBAGENT_MODEL is dropped so only the variant decides it.
  */
 export function authEnv(
   auth: AuthMode,
   env: Record<string, string | undefined> = process.env,
-): Record<string, string | undefined> | undefined {
-  if (auth === 'api-key') return undefined;
-  const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ...rest } = env;
-  return rest;
+): Record<string, string | undefined> {
+  const {
+    ANTHROPIC_API_KEY,
+    ANTHROPIC_AUTH_TOKEN,
+    AZURE_DEVOPS_PAT: _pat,
+    ADO_MCP_PAT_B64: _mcpPat,
+    CLAUDE_CODE_SUBAGENT_MODEL: _subagentModel,
+    ...rest
+  } = env;
+  return {
+    ...rest,
+    ...(auth === 'api-key' ? { ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN } : {}),
+    GIT_TERMINAL_PROMPT: '0',
+    // An empty credential.helper resets the helper list, so no stored
+    // credential is offered for any remote.
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'credential.helper',
+    GIT_CONFIG_VALUE_0: '',
+  };
+}
+
+/** Opaque per-variant directory tag, so no path the judge sees names a variant. */
+function opaqueSlot(): string {
+  return randomBytes(3).toString('hex');
 }
 
 function refuse(name: string): never {
@@ -148,13 +177,17 @@ async function runVariant(
   const variantDir = join(runDir, variant.name);
   mkdirSync(variantDir, { recursive: true });
 
+  // Planner artifacts embed absolute worktree paths, so the directory and
+  // branch must not name the variant or the blind judge could read it back.
+  const slot = opaqueSlot();
+  const worktreeRoot = join(config.worktreeRoot, `exp-${runId}-${slot}`);
   const vConfig: AppConfig = {
     ...config,
-    worktreeRoot: join(config.worktreeRoot, `exp-${runId}-${variant.name}`),
+    worktreeRoot,
     logDir: variantDir,
     jobMaxBudgetUsd: remainingUsd,
   };
-  const branch = `experiment/${runId}-${variant.name}`;
+  const branch = `experiment/${runId}-${slot}`;
 
   let last: AgentRunResult | undefined;
   const pipelineDeps: PipelineDeps = {
@@ -246,6 +279,7 @@ async function runVariant(
     taskCount,
     designDoc,
     rateLimit: last?.rateLimit,
+    worktreeRoot,
   };
   writeFileSync(join(variantDir, 'usage.json'), JSON.stringify(usage, null, 2), 'utf-8');
   log(`  Variant ${variant.name}: ${usage.status}, $${usage.costUsd.toFixed(2)}`);
@@ -258,8 +292,11 @@ async function runJudge(
   remainingUsd: number,
 ): Promise<JudgeResult> {
   const { config, set, frozen, runDir, auth, deps } = rc;
-  const judgeDir = join(runDir, 'judge', variant);
-  mkdirSync(judgeDir, { recursive: true });
+  // The judge works in a neutral temp directory: its cwd shows in its system
+  // prompt, and from inside the run directory the variant folders are one
+  // Glob away. The finished directory is copied back for inspection.
+  const judgeDir = mkdtempSync(join(tmpdir(), 'exp-judge-'));
+  const keptDir = join(runDir, 'judge', variant);
 
   const variantIsA = deps.random() < 0.5;
   const [a, b] = variantIsA ? [variant, set.baseline] : [set.baseline, variant];
@@ -295,6 +332,10 @@ async function runJudge(
       error: err instanceof Error ? err.message : String(err),
     };
   }
+
+  mkdirSync(keptDir, { recursive: true });
+  cpSync(judgeDir, keptDir, { recursive: true });
+  rmSync(judgeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 
   writeFileSync(
     join(runDir, 'judge', `${variant}.json`),

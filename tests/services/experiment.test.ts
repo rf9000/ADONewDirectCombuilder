@@ -55,7 +55,7 @@ function writeVariants(extra: Record<string, unknown> = {}): string {
 interface Fake {
   rateLimitOn?: string;
   noPlanDirFor?: string;
-  worktreeFailsFor?: string;
+  worktreeFailsOnFirstCall?: boolean;
   judgeWritesNothing?: boolean;
 }
 
@@ -63,8 +63,10 @@ function deps(fake: Fake = {}): ExperimentDeps & {
   runAgent: ReturnType<typeof mock>;
   createWorktree: ReturnType<typeof mock>;
 } {
+  let worktreeCalls = 0;
   const createWorktree = mock((cfg: AppConfig, repo: { key: string }) => {
-    if (fake.worktreeFailsFor && cfg.worktreeRoot.includes(fake.worktreeFailsFor)) {
+    worktreeCalls += 1;
+    if (fake.worktreeFailsOnFirstCall && worktreeCalls === 1) {
       return Promise.reject(new Error('git worktree add failed'));
     }
     const path = join(cfg.worktreeRoot, '42', repo.key);
@@ -160,10 +162,27 @@ describe('helpers', () => {
     expect(formatRunId(new Date('2026-09-30T10:15:07Z'))).toBe('20260930-101507');
   });
 
-  test('authEnv strips API credentials only for subscription', () => {
-    const env = { ANTHROPIC_API_KEY: 'k', ANTHROPIC_AUTH_TOKEN: 't', PATH: '/bin' };
-    expect(authEnv('subscription', env)).toEqual({ PATH: '/bin' });
-    expect(authEnv('api-key', env)).toBeUndefined();
+  const GIT_LOCKDOWN = {
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'credential.helper',
+    GIT_CONFIG_VALUE_0: '',
+  };
+  const fullEnv = {
+    ANTHROPIC_API_KEY: 'k',
+    ANTHROPIC_AUTH_TOKEN: 't',
+    AZURE_DEVOPS_PAT: 'pat',
+    ADO_MCP_PAT_B64: 'b64',
+    CLAUDE_CODE_SUBAGENT_MODEL: 'leaked',
+    PATH: '/bin',
+  };
+
+  test('authEnv strips Anthropic credentials for subscription, plus ADO and git credentials', () => {
+    expect(authEnv('subscription', fullEnv)).toEqual({ PATH: '/bin', ...GIT_LOCKDOWN });
+  });
+
+  test('authEnv keeps the API key for api-key auth but still strips ADO and git credentials', () => {
+    expect(authEnv('api-key', fullEnv)).toEqual({ ANTHROPIC_API_KEY: 'k', ANTHROPIC_AUTH_TOKEN: 't', PATH: '/bin', ...GIT_LOCKDOWN });
   });
 
   test('experimentDeps turns every ADO and git write into a throw', () => {
@@ -220,10 +239,33 @@ describe('runExperiment', () => {
 
     const judgeCall = d.runAgent.mock.calls.find((c) => String(c[1]).includes('You are reviewing'))!;
     expect(judgeCall[2]).toMatchObject({ model: 'claude-sonnet-5-5', allowedTools: ['Read', 'Glob', 'Grep', 'Write'] });
+    const kept = join(root, 'experiments', 'runs', '42', '20260930-101500', 'judge', 'sonnet');
+    expect(existsSync(join(kept, 'A', 'design-doc.md'))).toBe(true);
+    expect(existsSync(join(kept, 'B', 'design-doc.md'))).toBe(true);
+    expect(existsSync(join(kept, 'work-item.md'))).toBe(true);
+    expect(existsSync(join(kept, 'judge.json'))).toBe(true);
+  });
+
+  test('keeps variant names out of everything the judge can see', async () => {
+    const d = deps();
+    await runExperiment(config(), opts(), d);
+    const runDir = join(root, 'experiments', 'runs', '42', '20260930-101500');
+
+    for (const call of d.createWorktree.mock.calls) {
+      expect(call[0].worktreeRoot).not.toMatch(/opus|sonnet/);
+      expect(call[2]).not.toMatch(/opus|sonnet/);
+    }
+    const judgeCall = d.runAgent.mock.calls.find((c) => String(c[1]).includes('You are reviewing'))!;
     const judgeDir = judgeCall[2].cwd as string;
-    expect(existsSync(join(judgeDir, 'A', 'design-doc.md'))).toBe(true);
-    expect(existsSync(join(judgeDir, 'B', 'design-doc.md'))).toBe(true);
-    expect(existsSync(join(judgeDir, 'work-item.md'))).toBe(true);
+    expect(judgeDir).not.toMatch(/opus|sonnet/);
+    expect(judgeDir.startsWith(runDir)).toBe(false);
+    expect(judgeDir.startsWith(join(root, 'experiments'))).toBe(false);
+  });
+
+  test('records each variant worktree for inspection', async () => {
+    const r = await runExperiment(config(), opts(), deps());
+    expect(r.variants[0]!.worktreeRoot).toStartWith(join(root, 'worktrees', 'exp-20260930-101500-'));
+    expect(r.variants[0]!.worktreeRoot).not.toBe(r.variants[1]!.worktreeRoot);
   });
 
   test('--only filters variants', async () => {
@@ -265,7 +307,7 @@ describe('runExperiment', () => {
   });
 
   test('records a variant that fails before any agent call and continues', async () => {
-    const r = await runExperiment(config(), opts(), deps({ worktreeFailsFor: 'exp-20260930-101500-opus' }));
+    const r = await runExperiment(config(), opts(), deps({ worktreeFailsOnFirstCall: true }));
     expect(r.variants[0]).toMatchObject({ variant: 'opus', status: 'failed', costUsd: 0, error: 'git worktree add failed' });
     expect(r.variants[1]!.status).toBe('ok');
   });

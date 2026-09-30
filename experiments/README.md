@@ -51,6 +51,8 @@ variants later with `--only`.
 
 ## Clean up
 
-Experiment worktrees are kept for inspection under `$WORKTREE_ROOT/exp-<runId>-<variant>/`.
+Experiment worktrees are kept for inspection under `$WORKTREE_ROOT/exp-<runId>-<tag>/`. The tag is
+random so the blind judge cannot tell variants apart; each variant's `usage.json` records its
+`worktreeRoot`.
 Delete those directories, then run `git -C "$REPO_CACHE_DIR/banking.git" worktree prune` and
 the same for `setupFiles.git`.
