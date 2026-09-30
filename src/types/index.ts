@@ -176,6 +176,43 @@ export interface ItemProcessResult {
   error?: string;
 }
 
+/** Reasoning effort accepted by the Agent SDK. */
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/** How a local experiment authenticates the Claude Code child process. */
+export type AuthMode = 'subscription' | 'api-key';
+
+/** Tokens and cost one model spent during an agent run. */
+export interface ModelUsageSummary {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+}
+
+/** Last plan rate-limit state the SDK reported (subscription auth only). */
+export interface RateLimitInfo {
+  status: 'allowed' | 'allowed_warning' | 'rejected';
+  type?: string;
+  resetsAt?: number;
+}
+
+/**
+ * Per-run changes to how an agent runs. Production never sets these; the
+ * experiment command uses them to try cheaper configurations.
+ */
+export interface AgentOverrides {
+  model?: string;
+  effort?: EffortLevel;
+  /** Model for subagents the agent dispatches, via CLAUDE_CODE_SUBAGENT_MODEL. */
+  subagentModel?: string;
+  /** Base environment for the Claude Code child process. */
+  env?: Record<string, string | undefined>;
+  /** False loads no MCP servers. Defaults to true. */
+  mcp?: boolean;
+}
+
 /** Outcome of one agent SDK run. */
 export interface AgentRunResult {
   /** Final assistant text. */
@@ -188,6 +225,13 @@ export interface AgentRunResult {
   subtype?: string;
   costUsd: number;
   numTurns: number;
+  /** Per-model usage from the last result message — cumulative, never summed. */
+  modelUsage?: Record<string, ModelUsageSummary>;
+  durationMs?: number;
+  /** Last rate-limit event, or the first rejection if one happened. */
+  rateLimit?: RateLimitInfo;
+  /** Last assistant-message error the SDK reported, e.g. 'rate_limit'. */
+  assistantError?: string;
 }
 
 /** A question the planner needs a human to answer. */

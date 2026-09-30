@@ -2,10 +2,15 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { mockConfig } from '../helpers.ts';
 import {
+  buildChildEnv,
   expandEnvPlaceholders,
+  formatModelUsage,
+  formatTokens,
   loadMcpServers,
   readJsonArtifact,
+  runAgent,
   tailLog,
   withMcpTools,
 } from '../../src/services/agent-runner.ts';
@@ -200,5 +205,158 @@ describe('tailLog', () => {
     const sub = join(dir, 'subdir');
     mkdirSync(sub);
     expect(tailLog(sub)).toBe('(log unreadable)');
+  });
+});
+
+describe('buildChildEnv', () => {
+  test('returns undefined when nothing overrides the environment', () => {
+    expect(buildChildEnv({})).toBeUndefined();
+  });
+
+  test('adds CLAUDE_CODE_SUBAGENT_MODEL on top of the given env', () => {
+    const env = buildChildEnv({ env: { PATH: '/bin' }, subagentModel: 'claude-haiku-4-5-20251001' });
+    expect(env).toEqual({ PATH: '/bin', CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001' });
+  });
+
+  test('spreads process.env when only the subagent model is set', () => {
+    const env = buildChildEnv({ subagentModel: 'm' });
+    expect(env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe('m');
+    expect(env?.PATH).toBe(process.env.PATH);
+  });
+});
+
+describe('formatModelUsage', () => {
+  test('prints one line per model with compact token counts', () => {
+    expect(formatTokens(1_234_567)).toBe('1.2M');
+    expect(formatTokens(40_100)).toBe('40k');
+    expect(formatTokens(512)).toBe('512');
+    expect(
+      formatModelUsage({
+        'claude-sonnet-5-5': {
+          inputTokens: 1_200_000,
+          outputTokens: 40_000,
+          cacheReadTokens: 900_000,
+          cacheWriteTokens: 80_000,
+          costUsd: 3.1,
+        },
+      }),
+    ).toEqual([
+      'claude-sonnet-5-5: 1.2M in / 40k out / 900k cache-read / 80k cache-write — $3.10',
+    ]);
+  });
+});
+
+describe('runAgent with an injected query', () => {
+  function usage(cost: number) {
+    return {
+      'claude-opus-5-5': {
+        inputTokens: 100,
+        outputTokens: 10,
+        cacheReadInputTokens: 50,
+        cacheCreationInputTokens: 5,
+        webSearchRequests: 0,
+        costUSD: cost,
+        contextWindow: 1_000_000,
+        maxOutputTokens: 64_000,
+      },
+    };
+  }
+
+  function result(total: number) {
+    return {
+      type: 'result',
+      subtype: 'success',
+      result: 'done',
+      session_id: 's1',
+      total_cost_usd: total,
+      num_turns: 3,
+      duration_ms: 1234,
+      usage: { input_tokens: 100, output_tokens: 10 },
+      modelUsage: usage(total),
+    };
+  }
+
+  function fakeQuery(messages: unknown[], seen: { params?: any }) {
+    return ((params: unknown) => {
+      seen.params = params;
+      return (async function* () {
+        for (const m of messages) yield m;
+      })();
+    }) as never;
+  }
+
+  test('passes model, effort, env, allowedTools and skips MCP when asked', async () => {
+    const seen: { params?: any } = {};
+    await runAgent(
+      mockConfig(),
+      'hi',
+      {
+        cwd: dir,
+        logFile: join(dir, 'run.log'),
+        model: 'claude-sonnet-5-5',
+        effort: 'low',
+        subagentModel: 'claude-haiku-4-5-20251001',
+        env: { PATH: '/bin' },
+        allowedTools: ['Read'],
+        mcp: false,
+      },
+      fakeQuery([result(1)], seen),
+    );
+    const options = seen.params.options;
+    expect(options.model).toBe('claude-sonnet-5-5');
+    expect(options.effort).toBe('low');
+    expect(options.env).toEqual({ PATH: '/bin', CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001' });
+    expect(options.allowedTools).toEqual(['Read']);
+    expect(options.mcpServers).toBeUndefined();
+  });
+
+  test('leaves model, effort and env at production defaults without overrides', async () => {
+    const seen: { params?: any } = {};
+    const config = mockConfig();
+    await runAgent(config, 'hi', { cwd: dir, logFile: join(dir, 'run.log') }, fakeQuery([result(1)], seen));
+    const options = seen.params.options;
+    expect(options.model).toBe(config.claudeModel);
+    expect(options.effort).toBeUndefined();
+    expect(options.env).toBeUndefined();
+  });
+
+  test('takes modelUsage from the last result instead of summing', async () => {
+    const res = await runAgent(
+      mockConfig(),
+      'hi',
+      { cwd: dir, logFile: join(dir, 'run.log') },
+      fakeQuery([result(1), result(3)], {}),
+    );
+    expect(res.costUsd).toBe(3);
+    expect(res.durationMs).toBe(1234);
+    expect(res.modelUsage).toEqual({
+      'claude-opus-5-5': {
+        inputTokens: 100,
+        outputTokens: 10,
+        cacheReadTokens: 50,
+        cacheWriteTokens: 5,
+        costUsd: 3,
+      },
+    });
+  });
+
+  test('keeps a rate-limit rejection and the assistant error', async () => {
+    const res = await runAgent(
+      mockConfig(),
+      'hi',
+      { cwd: dir, logFile: join(dir, 'run.log') },
+      fakeQuery(
+        [
+          { type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1700000000 } },
+          { type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } },
+          { type: 'assistant', error: 'rate_limit', message: { content: [] } },
+          { ...result(0.5), subtype: 'error_during_execution' },
+        ],
+        {},
+      ),
+    );
+    expect(res.success).toBe(false);
+    expect(res.rateLimit).toEqual({ status: 'rejected', type: 'five_hour', resetsAt: 1700000000 });
+    expect(res.assistantError).toBe('rate_limit');
   });
 });

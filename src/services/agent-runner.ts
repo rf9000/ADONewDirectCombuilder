@@ -1,7 +1,13 @@
 import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { AppConfig, AgentRunResult } from '../types/index.ts';
+import type {
+  AgentOverrides,
+  AgentRunResult,
+  AppConfig,
+  ModelUsageSummary,
+  RateLimitInfo,
+} from '../types/index.ts';
 
 /**
  * Tools the pipeline agents are allowed to use. `Task`/`Agent` matter because the
@@ -24,7 +30,7 @@ const ALLOWED_TOOLS = [
   'NotebookEdit',
 ];
 
-export interface AgentRunOptions {
+export interface AgentRunOptions extends AgentOverrides {
   /** Working directory — the worktree whose .claude/ holds the wired skills. */
   cwd: string;
   /** Extra directories the agent may read and write (e.g. the sibling repo). */
@@ -41,6 +47,8 @@ export interface AgentRunOptions {
   maxBudgetUsd?: number;
   /** Optional extra system prompt appended to the default Claude Code preset. */
   appendSystemPrompt?: string;
+  /** Replaces the default tool allowlist (the experiment judge runs read-only). */
+  allowedTools?: string[];
 }
 
 function log(message: string): void {
@@ -130,6 +138,36 @@ export function withMcpTools(
 }
 
 /**
+ * Environment for the Claude Code child process, or undefined to let the SDK
+ * inherit ours. The SDK's `env` option replaces the environment rather than
+ * merging, so an override must carry everything else along with it.
+ */
+export function buildChildEnv(
+  options: Pick<AgentRunOptions, 'env' | 'subagentModel'>,
+): Record<string, string | undefined> | undefined {
+  if (!options.env && !options.subagentModel) return undefined;
+  const env = { ...(options.env ?? process.env) };
+  if (options.subagentModel) env.CLAUDE_CODE_SUBAGENT_MODEL = options.subagentModel;
+  return env;
+}
+
+export function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+  return String(n);
+}
+
+/** One line per model, so a log shows where a run's money went. */
+export function formatModelUsage(usage: Record<string, ModelUsageSummary>): string[] {
+  return Object.entries(usage).map(
+    ([model, u]) =>
+      `${model}: ${formatTokens(u.inputTokens)} in / ${formatTokens(u.outputTokens)} out / ` +
+      `${formatTokens(u.cacheReadTokens)} cache-read / ${formatTokens(u.cacheWriteTokens)} cache-write — ` +
+      `$${u.costUsd.toFixed(2)}`,
+  );
+}
+
+/**
  * Run one agent turn-loop to completion, streaming the transcript to disk.
  *
  * `settingSources: ['project']` is the load-bearing option: it makes the Agent
@@ -140,6 +178,7 @@ export async function runAgent(
   config: AppConfig,
   prompt: string,
   options: AgentRunOptions,
+  queryFn: typeof query = query,
 ): Promise<AgentRunResult> {
   mkdirSync(dirname(options.logFile), { recursive: true });
   const logStream = createWriteStream(options.logFile, { flags: 'a' });
@@ -152,8 +191,12 @@ export async function runAgent(
   write(`cwd: ${options.cwd}`);
   write(`--- prompt ---\n${prompt}\n--- end prompt ---`);
 
-  const mcpServers = loadMcpServers(options.cwd);
-  const allowedTools = withMcpTools(ALLOWED_TOOLS, mcpServers);
+  // A caller that restricts tools (the experiment judge) or opts out gets no
+  // MCP servers: this repo's .mcp.json carries an ADO PAT.
+  const useMcp = options.mcp !== false && options.allowedTools === undefined;
+  const mcpServers = useMcp ? loadMcpServers(options.cwd) : {};
+  const allowedTools = withMcpTools(options.allowedTools ?? ALLOWED_TOOLS, mcpServers);
+  const env = buildChildEnv(options);
 
   let text = '';
   let sessionId: string | undefined;
@@ -161,12 +204,18 @@ export async function runAgent(
   let subtype: string | undefined;
   let costUsd = 0;
   let numTurns = 0;
+  let modelUsage: Record<string, ModelUsageSummary> | undefined;
+  let durationMs: number | undefined;
+  let rateLimit: RateLimitInfo | undefined;
+  let assistantError: string | undefined;
 
   try {
-    for await (const message of query({
+    for await (const message of queryFn({
       prompt,
       options: {
-        model: config.claudeModel,
+        model: options.model ?? config.claudeModel,
+        ...(options.effort ? { effort: options.effort } : {}),
+        ...(env ? { env } : {}),
         cwd: options.cwd,
         additionalDirectories: options.additionalDirectories,
         settingSources: ['project'],
@@ -193,7 +242,17 @@ export async function runAgent(
         sessionId = (message as { session_id?: string }).session_id ?? sessionId;
       }
 
+      // Keep the first rejection: a later 'allowed' event must not hide that
+      // the run was cut off by a plan limit.
+      if (message.type === 'rate_limit_event') {
+        const info = message.rate_limit_info;
+        if (rateLimit?.status !== 'rejected') {
+          rateLimit = { status: info.status, type: info.rateLimitType, resetsAt: info.resetsAt };
+        }
+      }
+
       if (message.type === 'assistant') {
+        if (message.error) assistantError = message.error;
         for (const block of message.message.content) {
           if (block.type === 'text') {
             write(`[assistant] ${block.text}`);
@@ -228,6 +287,20 @@ export async function runAgent(
         costUsd = total;
         numTurns = message.num_turns ?? 0;
         subtype = message.subtype;
+        durationMs = message.duration_ms;
+        // Cumulative like total_cost_usd, so the last result wins.
+        modelUsage = Object.fromEntries(
+          Object.entries(message.modelUsage ?? {}).map(([model, u]) => [
+            model,
+            {
+              inputTokens: u.inputTokens,
+              outputTokens: u.outputTokens,
+              cacheReadTokens: u.cacheReadInputTokens,
+              cacheWriteTokens: u.cacheCreationInputTokens,
+              costUsd: u.costUSD,
+            },
+          ]),
+        );
         log(
           `  Cost: +$${delta.toFixed(4)} (run total $${costUsd.toFixed(4)}) | ${message.usage?.input_tokens ?? 0} in / ${message.usage?.output_tokens ?? 0} out | ${numTurns} turns`,
         );
@@ -244,11 +317,26 @@ export async function runAgent(
       }
     }
   } finally {
+    for (const line of formatModelUsage(modelUsage ?? {})) {
+      log(`  ${line}`);
+      write(`[usage] ${line}`);
+    }
     write(`===== run ended ${new Date().toISOString()} =====`);
     logStream.end();
   }
 
-  return { text: text.trim(), sessionId, success, subtype, costUsd, numTurns };
+  return {
+    text: text.trim(),
+    sessionId,
+    success,
+    subtype,
+    costUsd,
+    numTurns,
+    modelUsage,
+    durationMs,
+    rateLimit,
+    assistantError,
+  };
 }
 
 /**
