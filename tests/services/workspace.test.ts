@@ -20,6 +20,7 @@ import {
   worktreePath,
   ensureRepoCache,
   resolveSeedRepo,
+  revParse,
 } from '../../src/services/workspace.ts';
 
 let root: string;
@@ -380,5 +381,23 @@ describe('setGitIdentity', () => {
     // commitAndPush uses are invisible to it.
     expect(await run(['config', 'user.email'])).toBe('noreply@continia.com');
     expect(await run(['config', 'user.name'])).toBe('Continia Bank Comm Agent');
+  });
+});
+
+describe('revParse', () => {
+  test('returns the commit a ref points at', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'revparse-'));
+    try {
+      const { spawnSync } = await import('child_process');
+      const git = (...args: string[]) =>
+        spawnSync('git', args, { cwd: repo, encoding: 'utf-8' }).stdout.trim();
+      git('init', '-q');
+      git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x');
+      const expected = git('rev-parse', 'HEAD');
+
+      expect(await revParse(mockConfig(), repo, 'HEAD')).toBe(expected);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

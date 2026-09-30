@@ -13,6 +13,9 @@ import {
   buildSuccessComment,
   failedPhaseLog,
   prTitle,
+  runPlanningPhase,
+  prepareWorkspaces,
+  pathsFor,
   type PipelineDeps,
   type PhaseContext,
 } from '../../src/services/pipeline.ts';
@@ -1195,5 +1198,49 @@ describe('failedPhaseLog', () => {
     (deps as { tailLog: unknown }).tailLog = () => '(no log)';
 
     expect(failedPhaseLog(cfg, 42, deps)).toContain('plan-1');
+  });
+});
+
+describe('experiment hooks', () => {
+  test('runPlanningPhase forwards agentOverrides to runAgent', async () => {
+    const deps = makeDeps({ questions: CLEAN_PLAN });
+    const cfg = config();
+    const worktrees = await prepareWorkspaces(cfg, mockWorkItem(), 'b', deps);
+    const ctx: PhaseContext = {
+      config: cfg,
+      item: mockWorkItem(),
+      job: store.ensure(TEST_ITEM_ID),
+      store,
+      deps,
+      branch: 'b',
+      worktrees,
+      paths: pathsFor(worktrees.banking),
+      comments: [],
+      workItemContext: 'context',
+      agentOverrides: { model: 'm', effort: 'low', subagentModel: 's', mcp: false },
+    };
+
+    await runPlanningPhase(ctx);
+
+    const options = (deps.runAgent as ReturnType<typeof mock>).mock.calls[0]![2];
+    expect(options).toMatchObject({ model: 'm', effort: 'low', subagentModel: 's', mcp: false });
+  });
+
+  test('prepareWorkspaces passes pinned refs to createWorktree', async () => {
+    const deps = makeDeps();
+    await prepareWorkspaces(config(), mockWorkItem(), 'b', deps, {
+      banking: 'aaa111',
+      setupFiles: 'bbb222',
+    });
+    const calls = (deps.createWorktree as ReturnType<typeof mock>).mock.calls;
+    expect(calls[0]![4]).toBe('aaa111');
+    expect(calls[1]![4]).toBe('bbb222');
+  });
+
+  test('prepareWorkspaces leaves the ref unset in production', async () => {
+    const deps = makeDeps();
+    await prepareWorkspaces(config(), mockWorkItem(), 'b', deps);
+    const calls = (deps.createWorktree as ReturnType<typeof mock>).mock.calls;
+    expect(calls[0]![4]).toBeUndefined();
   });
 });

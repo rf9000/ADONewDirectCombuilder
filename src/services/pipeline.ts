@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type {
+  AgentOverrides,
   AgentRunResult,
   AppConfig,
   ItemProcessResult,
@@ -92,7 +93,7 @@ export function branchNameFor(config: AppConfig, item: WorkItemResponse): string
   return `${config.branchPrefix}/${item.id}-${slugify(title)}`;
 }
 
-function pathsFor(bankingWorktree: string): prompts.PhasePaths {
+export function pathsFor(bankingWorktree: string): prompts.PhasePaths {
   const agentDir = join(bankingWorktree, AGENT_DIR);
   return {
     agentDir,
@@ -117,18 +118,26 @@ function logPath(config: AppConfig, itemId: number, phase: string): string {
  * `.claude/repo-paths.json`. Nothing is pushed until the publishing phase, so an
  * existing worktree never implies an existing branch on the server.
  */
-async function prepareWorkspaces(
+export async function prepareWorkspaces(
   config: AppConfig,
   item: WorkItemResponse,
   branch: string,
   deps: PipelineDeps,
+  refs: { banking?: string; setupFiles?: string } = {},
 ): Promise<{ banking: string; setupFiles: string }> {
-  const banking = await deps.createWorktree(config, config.repos.banking, branch, item.id);
+  const banking = await deps.createWorktree(
+    config,
+    config.repos.banking,
+    branch,
+    item.id,
+    refs.banking,
+  );
   const setupFiles = await deps.createWorktree(
     config,
     config.repos.setupFiles,
     branch,
     item.id,
+    refs.setupFiles,
   );
 
   const repoPaths = {
@@ -201,6 +210,7 @@ async function runPhaseAgent(
     additionalDirectories: [ctx.worktrees.setupFiles],
     logFile,
     maxBudgetUsd: budgetUsd,
+    ...ctx.agentOverrides,
   });
 
   const total = spent + result.costUsd;
@@ -230,6 +240,8 @@ export interface PhaseContext {
   paths: prompts.PhasePaths;
   comments: WorkItemComment[];
   workItemContext: string;
+  /** Experiment-only model/effort/env changes; production leaves this unset. */
+  agentOverrides?: AgentOverrides;
 }
 
 /** Returns the planner's questions, or undefined when the plan came back clean. */

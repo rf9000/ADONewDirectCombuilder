@@ -94,6 +94,12 @@ export function worktreePath(
   return join(config.worktreeRoot, String(itemId), repo.key);
 }
 
+/** The commit `ref` points at, from inside `cwd` (a worktree or the bare cache). */
+export async function revParse(config: AppConfig, cwd: string, ref: string): Promise<string> {
+  const result = await git(config, ['rev-parse', ref], { cwd });
+  return result.stdout.trim();
+}
+
 /**
  * Accept a seed path only when it really is a git repository — either a working
  * clone (`.git`) or a bare one (`HEAD`). `git clone --reference` fails outright
@@ -176,6 +182,8 @@ export async function createWorktree(
   repo: RepoTarget,
   branch: string,
   itemId: number,
+  /** Commit or ref to start from; experiments pin this to a frozen SHA. */
+  ref: string = `refs/remotes/origin/${repo.defaultBranch}`,
 ): Promise<string> {
   const mirror = await ensureRepoCache(config, repo);
   const path = worktreePath(config, repo, itemId);
@@ -193,7 +201,7 @@ export async function createWorktree(
       '-B',
       branch,
       path,
-      `refs/remotes/origin/${repo.defaultBranch}`,
+      ref,
     ],
     { cwd: mirror },
   );
