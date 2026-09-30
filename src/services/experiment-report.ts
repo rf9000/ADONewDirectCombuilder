@@ -55,6 +55,9 @@ export function classifyStatus(
   error: string | undefined,
 ): VariantStatus {
   if (!result) return 'failed';
+  if (result.success && !error) return 'ok';
+  // Only a run that did not finish was stopped by the limit; a rejection that
+  // arrives while the last subagent winds down leaves a complete plan.
   if (result.rateLimit?.status === 'rejected' || result.assistantError === 'rate_limit') {
     return 'rate-limited';
   }

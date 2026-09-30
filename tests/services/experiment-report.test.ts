@@ -66,6 +66,10 @@ describe('classifyStatus', () => {
     expect(classifyStatus({ ...ok, success: false, rateLimit: { status: 'rejected' } }, 'x')).toBe('rate-limited'));
   test('rate-limited on the assistant error', () =>
     expect(classifyStatus({ ...ok, success: false, assistantError: 'rate_limit' }, 'x')).toBe('rate-limited'));
+  // A rejection event can arrive while the last subagent is finishing; the
+  // run still completed, so its plan must be judged, not discarded.
+  test('ok when the run succeeded despite a rate-limit event', () =>
+    expect(classifyStatus({ ...ok, rateLimit: { status: 'rejected' } }, undefined)).toBe('ok'));
   test('budget-stopped on the budget subtype', () =>
     expect(classifyStatus({ ...ok, success: false, subtype: 'error_max_budget_usd' }, 'x')).toBe('budget-stopped'));
   test('context-overflow on a too-long prompt', () =>
