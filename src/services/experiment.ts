@@ -52,6 +52,11 @@ export interface ExperimentOptions {
   /** Root of the experiments folder; runs land in <dir>/runs/<id>/<runId>/. */
   experimentsDir: string;
   runId?: string;
+  /**
+   * Continue an earlier run: reuse its frozen input, keep variants that
+   * already succeeded and judge verdicts that are still valid.
+   */
+  resumeRunId?: string;
 }
 
 export interface ExperimentDeps {
@@ -175,7 +180,10 @@ async function runVariant(
 ): Promise<VariantUsage> {
   const { config, frozen, runId, runDir, auth, deps } = rc;
   const variantDir = join(runDir, variant.name);
+  // A resumed variant starts clean; a failed attempt's files would mix in.
+  rmSync(variantDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   mkdirSync(variantDir, { recursive: true });
+  const startedAt = deps.now().getTime();
 
   // Planner artifacts embed absolute worktree paths, so the directory and
   // branch must not name the variant or the blind judge could read it back.
@@ -273,7 +281,9 @@ async function runVariant(
     costUsd: last?.costUsd ?? 0,
     modelUsage: last?.modelUsage ?? {},
     numTurns: last?.numTurns ?? 0,
-    durationMs: last?.durationMs ?? 0,
+    // Wall clock: the SDK's duration_ms covers only the last result's stretch
+    // when background subagents woke the session up again.
+    durationMs: deps.now().getTime() - startedAt,
     blocking: questions.blocking.length,
     ambiguities: questions.ambiguities.length,
     taskCount,
@@ -355,21 +365,33 @@ export async function runExperiment(
   for (const w of warnings) log(`  Warning: ${w}`);
   const variants = selectVariants(set, opts.only);
 
-  const runId = opts.runId ?? formatRunId(deps.now());
+  const runId = opts.resumeRunId ?? opts.runId ?? formatRunId(deps.now());
   const runDir = join(opts.experimentsDir, 'runs', String(opts.workItemId), runId);
-  mkdirSync(runDir, { recursive: true });
   log(
     `Experiment ${runId} on #${opts.workItemId}: auth=${opts.auth}, ` +
-      `${variants.length} variant(s), cap $${set.maxUsd}`,
+      `${variants.length} variant(s), cap ${set.maxUsd}${opts.resumeRunId ? ' (resumed)' : ''}`,
   );
 
-  const frozen = await freezeInput(
-    config,
-    opts.workItemId,
-    runDir,
-    { answersFile: opts.answersFile, questionsFile: opts.questionsFile },
-    deps.freeze,
-  );
+  let frozen: FrozenInput;
+  if (opts.resumeRunId) {
+    const inputPath = join(runDir, 'input.json');
+    if (!existsSync(inputPath)) {
+      throw new Error(`Cannot resume ${runId}: no input.json at ${inputPath}`);
+    }
+    if (opts.answersFile || opts.questionsFile) {
+      log('  Warning: --answers/--questions are ignored on --resume; the frozen input is reused');
+    }
+    frozen = JSON.parse(readFileSync(inputPath, 'utf-8')) as FrozenInput;
+  } else {
+    mkdirSync(runDir, { recursive: true });
+    frozen = await freezeInput(
+      config,
+      opts.workItemId,
+      runDir,
+      { answersFile: opts.answersFile, questionsFile: opts.questionsFile },
+      deps.freeze,
+    );
+  }
 
   const rc: RunContext = { config, set, frozen, runId, runDir, auth: opts.auth, deps };
   const usages: VariantUsage[] = [];
@@ -377,13 +399,27 @@ export async function runExperiment(
   let spent = 0;
   let stoppedReason: string | undefined;
 
+  // Variants that ran in this invocation; their judge verdicts are stale.
+  const ranNow = new Set<string>();
+
   for (const variant of variants) {
+    const previous = opts.resumeRunId
+      ? (readJson(join(runDir, variant.name, 'usage.json')) as VariantUsage | undefined)
+      : undefined;
+    if (previous?.status === 'ok') {
+      log(`  Variant ${variant.name}: kept from earlier attempt, ${previous.costUsd.toFixed(2)}`);
+      usages.push(previous);
+      spent += previous.costUsd;
+      continue;
+    }
+
     const remaining = set.maxUsd - spent;
     if (remaining <= 0) {
       stoppedReason = `experiment budget of $${set.maxUsd} was used up before '${variant.name}'`;
       break;
     }
     const usage = await runVariant(rc, variant, remaining);
+    ranNow.add(variant.name);
     usages.push(usage);
     spent += usage.costUsd;
     if (usage.status === 'rate-limited') {
@@ -404,6 +440,21 @@ export async function runExperiment(
   } else {
     for (const usage of usages) {
       if (usage.variant === set.baseline || usage.status !== 'ok') continue;
+
+      const stale = ranNow.has(usage.variant) || ranNow.has(set.baseline);
+      const previous =
+        opts.resumeRunId && !stale
+          ? (readJson(join(runDir, 'judge', `${usage.variant}.json`)) as
+              | (JudgeResult & { planA?: string; planB?: string })
+              | undefined)
+          : undefined;
+      if (previous?.verdict && !previous.error) {
+        const { planA: _a, planB: _b, ...kept } = previous;
+        judges.push(kept);
+        spent += kept.costUsd;
+        continue;
+      }
+
       const remaining = set.maxUsd - spent;
       if (remaining <= 0) {
         notes.push('Judge stopped: the experiment budget was used up.');

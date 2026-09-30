@@ -45,3 +45,11 @@ describe('parseExperimentArgs', () => {
     expect(() => parseExperimentArgs(['plan', '1', '--auth', 'oauth'])).toThrow("--auth must be 'subscription' or 'api-key'");
   });
 });
+
+describe('parseExperimentArgs --resume', () => {
+  test('reads the run id to resume', () => {
+    expect(parseExperimentArgs(['plan', '83634', '--resume', '20260930-190025']).resumeRunId).toBe(
+      '20260930-190025',
+    );
+  });
+});

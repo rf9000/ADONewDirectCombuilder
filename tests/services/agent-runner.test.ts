@@ -440,3 +440,31 @@ describe('runAgent hardening', () => {
     expect(seen.params.options.strictMcpConfig).toBeUndefined();
   });
 });
+
+describe('runAgent turn counting', () => {
+  test('sums turns across the results of one query', async () => {
+    const res = await runAgent(
+      mockConfig(),
+      'hi',
+      { cwd: dir, logFile: join(dir, 'run.log') },
+      ((_params: unknown) =>
+        (async function* () {
+          for (const [turns, total] of [[25, 4], [3, 30], [5, 30]] as const) {
+            yield {
+              type: 'result',
+              subtype: 'success',
+              result: 'x',
+              session_id: 's',
+              total_cost_usd: total,
+              num_turns: turns,
+              duration_ms: 1,
+              usage: { input_tokens: 1, output_tokens: 1 },
+              modelUsage: {},
+            };
+          }
+        })()) as never,
+    );
+    expect(res.numTurns).toBe(33);
+    expect(res.costUsd).toBe(30);
+  });
+});

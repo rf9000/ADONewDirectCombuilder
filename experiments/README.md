@@ -46,8 +46,13 @@ Nothing is written to Azure DevOps and nothing is pushed. Agent runs load no MCP
 the judge's verdict and rubric scores, per-model token usage, and the gaps the judge found.
 The "cheapest good-enough" line is a suggestion. Read the gaps before deciding.
 
-A rate-limit rejection stops the sweep and writes a partial report. Re-run the remaining
-variants later with `--only`.
+A rate-limit rejection or a failed variant does not have to cost a full rerun:
+`--resume <runId>` reuses that run's frozen input, keeps variants that already succeeded and
+judge verdicts that are still valid, and runs only the rest.
+
+```bash
+bun run experiment plan 83634 --only opus-high,opus-haiku-subs --resume 20260930-190025
+```
 
 ## Clean up
 

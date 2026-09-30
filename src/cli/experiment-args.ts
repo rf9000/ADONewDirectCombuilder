@@ -4,7 +4,7 @@ export const DEFAULT_VARIANTS_FILE = 'experiments/variants/planning-baseline.jso
 
 export const EXPERIMENT_USAGE =
   'Usage: bun run experiment plan <work-item-id> [--variants <file>] [--only a,b] ' +
-  '[--answers <file>] [--questions <file>] [--auth subscription|api-key]';
+  '[--answers <file>] [--questions <file>] [--auth subscription|api-key] [--resume <runId>]';
 
 export interface ExperimentArgs {
   workItemId: number;
@@ -13,9 +13,10 @@ export interface ExperimentArgs {
   answersFile?: string;
   questionsFile?: string;
   auth: AuthMode;
+  resumeRunId?: string;
 }
 
-const FLAGS = new Set(['--variants', '--only', '--answers', '--questions', '--auth']);
+const FLAGS = new Set(['--variants', '--only', '--answers', '--questions', '--auth', '--resume']);
 
 export function parseExperimentArgs(argv: string[]): ExperimentArgs {
   const [phase, id, ...rest] = argv;
@@ -46,5 +47,7 @@ export function parseExperimentArgs(argv: string[]): ExperimentArgs {
   if (answers) args.answersFile = answers;
   const questions = values.get('--questions');
   if (questions) args.questionsFile = questions;
+  const resume = values.get('--resume');
+  if (resume) args.resumeRunId = resume;
   return args;
 }

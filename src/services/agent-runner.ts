@@ -291,7 +291,9 @@ export async function runAgent(
         const total = message.total_cost_usd ?? costUsd;
         const delta = total - costUsd;
         costUsd = total;
-        numTurns = message.num_turns ?? 0;
+        // Unlike the cost, num_turns covers only this result's stretch of the
+        // session, so a query that woke up again for subagents adds them up.
+        numTurns += message.num_turns ?? 0;
         subtype = message.subtype;
         durationMs = message.duration_ms;
         // Cumulative like total_cost_usd, so the last result wins.

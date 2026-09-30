@@ -323,6 +323,55 @@ describe('runExperiment', () => {
     expect(r.judges[0]).toMatchObject({ variant: 'sonnet', error: 'judge wrote no judge.json' });
   });
 
+  test('measures each variant by wall clock, not by the last result', async () => {
+    const d = deps();
+    let t = Date.parse('2026-09-30T10:15:00Z');
+    d.now = () => new Date((t += 90_000));
+    const r = await runExperiment(config(), opts({ only: ['opus'] }), d);
+    expect(r.variants[0]!.durationMs).toBe(90_000);
+  });
+
+  test('--resume reuses the frozen input and skips variants that already succeeded', async () => {
+    const first = deps({ worktreeFailsOnFirstCall: true });
+    const r1 = await runExperiment(config(), opts(), first);
+    expect(r1.variants.map((v) => v.status)).toEqual(['failed', 'ok']);
+
+    const d = deps();
+    let froze = 0;
+    d.freeze.getWorkItem = async () => {
+      froze += 1;
+      return mockWorkItem();
+    };
+    const r = await runExperiment(config(), opts({ resumeRunId: r1.runId }), d);
+
+    expect(froze).toBe(0);
+    expect(r.runId).toBe(r1.runId);
+    expect(r.variants.map((v) => [v.variant, v.status])).toEqual([
+      ['opus', 'ok'],
+      ['sonnet', 'ok'],
+    ]);
+    const planCalls = d.runAgent.mock.calls.filter((c) => String(c[1]).includes('bank-integration-planner'));
+    expect(planCalls.map((c) => c[2].model)).toEqual(['claude-opus-5-5']);
+    expect(r.judges.map((j) => j.variant)).toEqual(['sonnet']);
+    // 10 (reused sonnet) + 50 (opus now) + 0.5 (judge)
+    expect(r.totalUsd).toBe(60.5);
+  });
+
+  test('--resume keeps a judge verdict that already succeeded', async () => {
+    const r1 = await runExperiment(config(), opts(), deps());
+    const d = deps();
+    const r = await runExperiment(config(), opts({ resumeRunId: r1.runId }), d);
+    expect(d.runAgent.mock.calls).toHaveLength(0);
+    expect(r.judges[0]).toMatchObject({ variant: 'sonnet', verdict: 'equivalent' });
+    expect(r.totalUsd).toBe(60.5);
+  });
+
+  test('--resume of an unknown run fails with the path it looked for', async () => {
+    await expect(runExperiment(config(), opts({ resumeRunId: 'nope' }), deps())).rejects.toThrow(
+      'no input.json',
+    );
+  });
+
   test('answers and previous questions make it a follow-up round', async () => {
     writeFileSync(join(root, 'answers.md'), 'Use the sandbox.');
     writeFileSync(join(root, 'questions.json'), JSON.stringify({ blocking: [{ question: 'Sandbox?' }], ambiguities: [] }));

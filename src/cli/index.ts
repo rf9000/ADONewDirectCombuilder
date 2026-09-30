@@ -33,6 +33,7 @@ Commands:
                        cost and quality (see experiments/README.md). Flags:
                        --variants <file> --only a,b --answers <file>
                        --questions <file> --auth subscription|api-key
+                       --resume <runId> (reuse a run; skip variants that succeeded)
   help                 Show this help message
 
 Options:
