@@ -67,6 +67,7 @@ docker-compose.
 - `bun run start` — start the watcher
 - `bun run once` — single poll cycle
 - `bun run status` — show tracked jobs and their phases
+- `bun run experiment plan <id>` — local A/B of planning variants (see `experiments/README.md`)
 
 ## File Layout
 
@@ -76,3 +77,4 @@ docker-compose.
 - `src/state/` — per-work-item job records (JSON)
 - `src/types/` — shared interfaces
 - `tests/` — mirrors src/ structure; `tests/helpers.ts` builds configs through `loadConfig`
+- `experiments/` — variant sets and findings (committed); `runs/` is local-only output

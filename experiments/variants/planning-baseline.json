@@ -1,0 +1,15 @@
+{
+  "phase": "planning",
+  "baseline": "opus-high",
+  "judgeModel": "claude-sonnet-5-5",
+  "maxUsd": 200,
+  "variants": [
+    { "name": "opus-high", "model": "claude-opus-5-5", "effort": "high" },
+    { "name": "opus-med", "model": "claude-opus-5-5", "effort": "medium" },
+    { "name": "opus-sonnet-subs", "model": "claude-opus-5-5", "effort": "high", "subagentModel": "claude-sonnet-5-5" },
+    { "name": "opus-haiku-subs", "model": "claude-opus-5-5", "effort": "high", "subagentModel": "claude-haiku-4-5-20251001" },
+    { "name": "sonnet-high", "model": "claude-sonnet-5-5", "effort": "high" },
+    { "name": "sonnet-haiku-subs", "model": "claude-sonnet-5-5", "effort": "high", "subagentModel": "claude-haiku-4-5-20251001" },
+    { "name": "haiku", "model": "claude-haiku-4-5-20251001" }
+  ]
+}

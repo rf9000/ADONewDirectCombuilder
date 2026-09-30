@@ -7,6 +7,7 @@
     "start": "bun run src/cli/index.ts watch",
     "once": "bun run src/cli/index.ts run-once",
     "status": "bun run src/cli/index.ts status",
+    "experiment": "bun run src/cli/index.ts experiment",
     "test": "bun test --preload ./tests/setup.ts tests/**/*.test.ts",
     "test:unit": "bun test --preload ./tests/setup.ts ./tests/config/ ./tests/sdk/ ./tests/state/ ./tests/services/",
     "test:integration": "bun test --preload ./tests/setup.ts tests/integration/**/*.test.ts",

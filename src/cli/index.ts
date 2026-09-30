@@ -6,6 +6,8 @@ import { StateStore } from '../state/state-store.ts';
 import { getWorkItem } from '../sdk/azure-devops-client.ts';
 import { processItem } from '../services/processor.ts';
 import { removeAllWorktrees } from '../services/workspace.ts';
+import { parseExperimentArgs } from './experiment-args.ts';
+import { runExperiment } from '../services/experiment.ts';
 
 const HELP = `
 New Bank Communication Builder
@@ -27,6 +29,10 @@ Commands:
   reset-item <id>      Clear state for one work item so it runs from scratch
   cleanup-worktrees <id>  Remove the worktrees for one work item
   reset-budget <id>    Zero the recorded spend for one work item (JOB_MAX_BUDGET_USD)
+  experiment plan <id> Run planning variants locally on frozen input and compare
+                       cost and quality (see experiments/README.md). Flags:
+                       --variants <file> --only a,b --answers <file>
+                       --questions <file> --auth subscription|api-key
   help                 Show this help message
 
 Options:
@@ -162,6 +168,29 @@ switch (command) {
     stateStore.update(itemId, { spentUsd: 0 });
     stateStore.save();
     console.log(`Spend for #${itemId} reset (was $${previous.toFixed(2)})`);
+    break;
+  }
+
+  case 'experiment': {
+    let args;
+    try {
+      args = parseExperimentArgs(process.argv.slice(3));
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+      break;
+    }
+    // Planning never reaches verify, so the DemoPortal token is irrelevant here;
+    // the API key is only needed when not running on the Claude login.
+    const config = loadConfig(
+      { ...process.env, SKIP_BUILD_TEST: 'true' },
+      { requireApiKey: args.auth === 'api-key' },
+    );
+    const results = await runExperiment(config, { ...args, experimentsDir: 'experiments' });
+    console.log(
+      `\n${results.variants.length} variant(s), $${results.totalUsd.toFixed(2)} API-equivalent` +
+        `${results.stoppedReason ? ` — stopped: ${results.stoppedReason}` : ''}`,
+    );
     break;
   }
 
