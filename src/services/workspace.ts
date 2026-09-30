@@ -26,6 +26,18 @@ function log(message: string): void {
 }
 
 /**
+ * The auth header carries the PAT, and a failed command's message travels to
+ * logs and to the failure comment on the work item.
+ */
+function redactArgs(args: string[]): string[] {
+  return args.map((arg) =>
+    arg.startsWith('http.extraHeader=Authorization:')
+      ? 'http.extraHeader=Authorization: ***'
+      : arg,
+  );
+}
+
+/**
  * Run a command without a shell, so PATs and paths with spaces can never be
  * re-interpreted. Rejects on non-zero exit unless `allowFailure` is set.
  */
@@ -56,7 +68,7 @@ export function run(
       if (result.code !== 0 && !options.allowFailure) {
         reject(
           new Error(
-            `${command} ${args.join(' ')} exited ${result.code}\n${stderr || stdout}`,
+            `${command} ${redactArgs(args).join(' ')} exited ${result.code}\n${stderr || stdout}`,
           ),
         );
         return;

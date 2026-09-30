@@ -21,6 +21,7 @@ import {
   ensureRepoCache,
   resolveSeedRepo,
   revParse,
+  run as runCommand,
 } from '../../src/services/workspace.ts';
 
 let root: string;
@@ -399,5 +400,20 @@ describe('revParse', () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
+  });
+});
+
+describe('run error messages', () => {
+  // A failed clone's error ends up in logs and in the failure comment posted to
+  // the work item, so the auth header must never appear in it.
+  test('redact the git auth header', async () => {
+    const err = await runCommand('git', [
+      '-c',
+      'http.extraHeader=Authorization: Basic U0VDUkVULVBBVA==',
+      'no-such-subcommand',
+    ]).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain('U0VDUkVULVBBVA==');
+    expect((err as Error).message).toContain('http.extraHeader=Authorization: ***');
   });
 });
