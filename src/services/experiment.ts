@@ -31,6 +31,7 @@ import {
   buildJudgePrompt,
   JUDGE_OUTPUT,
   JUDGE_TOOLS,
+  PLAN_CONTRACT_FILES,
   parseJudgeOutput,
   type JudgeResult,
 } from './experiment-judge.ts';
@@ -310,8 +311,12 @@ async function runJudge(
 
   const variantIsA = deps.random() < 0.5;
   const [a, b] = variantIsA ? [variant, set.baseline] : [set.baseline, variant];
-  copyIfExists(join(runDir, a, 'plan'), join(judgeDir, 'A'));
-  copyIfExists(join(runDir, b, 'plan'), join(judgeDir, 'B'));
+  for (const [side, source] of [['A', a], ['B', b]] as const) {
+    mkdirSync(join(judgeDir, side), { recursive: true });
+    for (const file of PLAN_CONTRACT_FILES) {
+      copyIfExists(join(runDir, source, 'plan', file), join(judgeDir, side, file));
+    }
+  }
   copyIfExists(join(runDir, 'input', 'docs'), join(judgeDir, 'docs'));
   writeFileSync(join(judgeDir, 'work-item.md'), frozen.context, 'utf-8');
 
@@ -369,7 +374,7 @@ export async function runExperiment(
   const runDir = join(opts.experimentsDir, 'runs', String(opts.workItemId), runId);
   log(
     `Experiment ${runId} on #${opts.workItemId}: auth=${opts.auth}, ` +
-      `${variants.length} variant(s), cap ${set.maxUsd}${opts.resumeRunId ? ' (resumed)' : ''}`,
+      `${variants.length} variant(s), cap $${set.maxUsd}${opts.resumeRunId ? ' (resumed)' : ''}`,
   );
 
   let frozen: FrozenInput;
@@ -407,7 +412,7 @@ export async function runExperiment(
       ? (readJson(join(runDir, variant.name, 'usage.json')) as VariantUsage | undefined)
       : undefined;
     if (previous?.status === 'ok') {
-      log(`  Variant ${variant.name}: kept from earlier attempt, ${previous.costUsd.toFixed(2)}`);
+      log(`  Variant ${variant.name}: kept from earlier attempt, $${previous.costUsd.toFixed(2)}`);
       usages.push(previous);
       spent += previous.costUsd;
       continue;

@@ -2,6 +2,13 @@ import { z } from 'zod';
 
 export const JUDGE_OUTPUT = 'judge.json';
 
+/**
+ * The files the planning prompt requires. Only these reach the judge: the
+ * planner leaves different scratch behind on different runs, and uneven
+ * extras would tell the two plans apart.
+ */
+export const PLAN_CONTRACT_FILES = ['design-doc.md', 'tasklist.json', 'questions.json', 'artifacts.json'];
+
 /** Read-only apart from writing its own verdict file. */
 export const JUDGE_TOOLS = ['Read', 'Glob', 'Grep', 'Write'];
 
@@ -61,7 +68,16 @@ Files in your working directory:
 - \`A/\` and \`B/\` — one plan each: \`design-doc.md\`, \`tasklist.json\`, \`questions.json\`,
   \`artifacts.json\`. Some files may be missing; a missing design doc is itself a finding.
 
-Read both plans fully and check them against the work item and the API docs.
+Before you score, read all of these. Scores for files you did not read are guesses:
+
+- \`work-item.md\`, fully.
+- both \`design-doc.md\` files, fully.
+- both \`tasklist.json\` files, fully. They are large; read them in parts with an offset until
+  you reach the end.
+- both \`questions.json\` files.
+- every file in \`docs/\`, at least the operations, request and response schemas the plans use.
+
+Then check each plan against the work item and the API docs.
 
 Score each plan from 1 (poor) to 5 (excellent):
 

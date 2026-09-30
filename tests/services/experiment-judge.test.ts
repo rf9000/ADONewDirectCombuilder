@@ -70,4 +70,11 @@ describe('buildJudgePrompt', () => {
     expect(prompt.toLowerCase()).not.toContain('baseline');
     expect(prompt.toLowerCase()).not.toContain('variant');
   });
+
+  test('makes the judge read the task lists and the API docs before scoring', () => {
+    const prompt = buildJudgePrompt();
+    expect(prompt).toContain('Before you score, read all of these');
+    expect(prompt).toContain('both `tasklist.json` files');
+    expect(prompt).toContain('every file in `docs/`');
+  });
 });

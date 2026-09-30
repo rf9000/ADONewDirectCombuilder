@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { mockConfig, mockWorkItem } from '../helpers.ts';
@@ -119,6 +119,10 @@ function deps(fake: Fake = {}): ExperimentDeps & {
       writeFileSync(join(planDir, 'questions.json'), JSON.stringify({ blocking: [], ambiguities: [{ question: 'q' }] }));
       writeFileSync(join(planDir, 'design-doc.md'), '# plan');
       writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ tasks: [1, 2, 3] }));
+      writeFileSync(join(planDir, 'artifacts.json'), '{}');
+      // Planner scratch that only some runs leave behind.
+      mkdirSync(join(planDir, 'fragments'), { recursive: true });
+      writeFileSync(join(planDir, 'fragments', 'auth.md'), 'scratch');
     }
     return Promise.resolve(base);
   });
@@ -244,6 +248,19 @@ describe('runExperiment', () => {
     expect(existsSync(join(kept, 'B', 'design-doc.md'))).toBe(true);
     expect(existsSync(join(kept, 'work-item.md'))).toBe(true);
     expect(existsSync(join(kept, 'judge.json'))).toBe(true);
+  });
+
+  test('gives the judge only the plan contract files, not planner scratch', async () => {
+    await runExperiment(config(), opts(), deps());
+    const kept = join(root, 'experiments', 'runs', '42', '20260930-101500', 'judge', 'sonnet');
+    for (const side of ['A', 'B']) {
+      expect(readdirSync(join(kept, side)).sort()).toEqual([
+        'artifacts.json',
+        'design-doc.md',
+        'questions.json',
+        'tasklist.json',
+      ]);
+    }
   });
 
   test('keeps variant names out of everything the judge can see', async () => {
