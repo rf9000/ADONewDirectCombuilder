@@ -349,7 +349,10 @@ export async function runAgent(
       write(`[usage] ${line}`);
     }
     write(`===== run ended ${new Date().toISOString()} =====`);
-    logStream.end();
+    // Wait for the flush: callers read the transcript straight after (tailLog
+    // in failure comments, the experiment copying a variant's log), and a
+    // stream still opening when its folder is removed fails asynchronously.
+    await new Promise<void>((resolve) => logStream.end(resolve));
   }
 
   return {

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { mockConfig } from '../helpers.ts';
@@ -532,5 +532,24 @@ describe('runAgent session resume', () => {
       }) as never,
     );
     expect(seen.params.options.resume).toBe('sess-1');
+  });
+});
+
+describe('runAgent transcript', () => {
+  test('has written and closed the whole log by the time it returns', async () => {
+    const logFile = join(dir, 'run.log');
+    await runAgent(
+      mockConfig(),
+      'hi',
+      { cwd: dir, logFile },
+      ((_params: unknown) =>
+        (async function* () {
+          yield {
+            type: 'result', subtype: 'success', result: 'x', session_id: 's', total_cost_usd: 0,
+            num_turns: 1, duration_ms: 1, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {},
+          };
+        })()) as never,
+    );
+    expect(readFileSync(logFile, 'utf-8')).toContain('===== run ended');
   });
 });
