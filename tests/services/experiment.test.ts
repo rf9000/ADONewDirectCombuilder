@@ -155,7 +155,9 @@ function deps(fake: Fake = {}): ExperimentDeps & {
 function opts(extra: Record<string, unknown> = {}) {
   return {
     workItemId: 42,
-    variantsFile: writeVariants(),
+    // Only write the default file when the test did not: both use one path,
+    // and writing it here would overwrite the test's own variant set.
+    variantsFile: (extra.variantsFile as string | undefined) ?? writeVariants(),
     auth: 'subscription' as const,
     experimentsDir: join(root, 'experiments'),
     ...extra,
@@ -391,7 +393,7 @@ describe('runExperiment', () => {
     );
   });
 
-  test('--from-plan starts each variant from an earlier plan in revision mode', async () => {
+  test('--from-plan starts revise variants from the earlier plan in revision mode', async () => {
     const earlier = join(root, 'earlier-plan');
     mkdirSync(earlier, { recursive: true });
     writeFileSync(join(earlier, 'design-doc.md'), '# Earlier plan');
@@ -402,7 +404,12 @@ describe('runExperiment', () => {
     const d = deps();
     const r = await runExperiment(
       config(),
-      opts({ only: ['opus'], answersFile: join(root, 'answers.md'), fromPlan: earlier }),
+      opts({
+        only: ['opus'],
+        answersFile: join(root, 'answers.md'),
+        fromPlan: earlier,
+        variantsFile: writeVariants({ variants: [{ name: 'opus', model: 'claude-opus-5-5', revise: true }] }),
+      }),
       d,
     );
 
@@ -420,8 +427,57 @@ describe('runExperiment', () => {
     writeFileSync(join(earlier, 'design-doc.md'), '# Earlier plan');
     writeFileSync(join(earlier, 'questions.json'), JSON.stringify({ blocking: [], ambiguities: [] }));
     const d = deps({ revisionMode: 'incremental' });
-    const r = await runExperiment(config(), opts({ only: ['opus'], fromPlan: earlier }), d);
+    const r = await runExperiment(
+      config(),
+      opts({
+        only: ['opus'],
+        fromPlan: earlier,
+        variantsFile: writeVariants({ variants: [{ name: 'opus', model: 'claude-opus-5-5', revise: true }] }),
+      }),
+      d,
+    );
     expect(r.variants[0]!.revisionMode).toBe('incremental');
+  });
+
+  test('--from-plan re-plans other variants in full on the same questions and answers', async () => {
+    const earlier = join(root, 'earlier-plan');
+    mkdirSync(earlier, { recursive: true });
+    writeFileSync(join(earlier, 'design-doc.md'), '# Earlier plan');
+    writeFileSync(join(earlier, 'questions.json'), JSON.stringify({ blocking: [{ question: 'Sandbox?' }], ambiguities: [] }));
+    writeFileSync(join(root, 'answers.md'), 'Use the sandbox.');
+    const d = deps();
+    await runExperiment(
+      config(),
+      opts({
+        answersFile: join(root, 'answers.md'),
+        fromPlan: earlier,
+        variantsFile: writeVariants({
+          baseline: 'full',
+          variants: [
+            { name: 'full', model: 'claude-opus-5-5' },
+            { name: 'revise', model: 'claude-opus-5-5', revise: true },
+          ],
+        }),
+      }),
+      d,
+    );
+    const plans = d.runAgent.mock.calls.filter((c) => String(c[1]).includes('bank-integration-planner'));
+    expect(String(plans[0]![1])).toContain('run it to completion');
+    expect(String(plans[0]![1])).toContain('Sandbox?');
+    expect(String(plans[0]![1])).toContain('Use the sandbox.');
+    expect(String(plans[1]![1])).toContain('revision mode');
+  });
+
+  test('a revise variant without --from-plan is refused before anything runs', async () => {
+    const d = deps();
+    await expect(
+      runExperiment(
+        config(),
+        opts({ variantsFile: writeVariants({ variants: [{ name: 'opus', revise: true }] }) }),
+        d,
+      ),
+    ).rejects.toThrow('needs --from-plan');
+    expect(d.runAgent.mock.calls).toHaveLength(0);
   });
 
   test('answers and previous questions make it a follow-up round', async () => {

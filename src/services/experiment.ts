@@ -229,7 +229,7 @@ async function runVariant(
 
     const store = new StateStore(join(variantDir, 'state'));
     store.ensure(frozen.workItemId);
-    if (frozen.fromPlan) {
+    if (variant.revise && frozen.fromPlan) {
       // The earlier round's plan sits where the pipeline expects the previous
       // round's output, so runPlanningPhase takes the revision path.
       copyIfExists(frozen.fromPlan, dirname(paths.questionsPath));
@@ -379,6 +379,10 @@ export async function runExperiment(
   const { set, warnings } = loadVariantSet(opts.variantsFile);
   for (const w of warnings) log(`  Warning: ${w}`);
   const variants = selectVariants(set, opts.only);
+  const revising = variants.find((v) => v.revise);
+  if (revising && !opts.fromPlan && !opts.resumeRunId) {
+    throw new Error(`variant '${revising.name}' has revise: true and needs --from-plan`);
+  }
 
   const runId = opts.resumeRunId ?? opts.runId ?? formatRunId(deps.now());
   const runDir = join(opts.experimentsDir, 'runs', String(opts.workItemId), runId);

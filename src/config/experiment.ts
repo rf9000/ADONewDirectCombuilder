@@ -11,6 +11,9 @@ const variantSchema = z.object({
   model: z.string().min(1).optional(),
   effort: z.enum(EFFORT_LEVELS).optional(),
   subagentModel: z.string().min(1).optional(),
+  // With --from-plan: start from that plan and take the revision path. Variants
+  // without it re-plan in full on the same questions and answers.
+  revise: z.boolean().optional(),
 });
 
 const variantSetSchema = z

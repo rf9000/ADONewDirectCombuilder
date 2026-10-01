@@ -1,0 +1,10 @@
+{
+  "phase": "planning",
+  "baseline": "full-replan",
+  "judgeModel": "claude-sonnet-5-5",
+  "maxUsd": 120,
+  "variants": [
+    { "name": "full-replan", "model": "claude-opus-5-5", "effort": "high" },
+    { "name": "revise", "model": "claude-opus-5-5", "effort": "high", "revise": true }
+  ]
+}
