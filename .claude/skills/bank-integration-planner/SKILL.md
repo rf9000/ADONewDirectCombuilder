@@ -21,6 +21,7 @@ Phase 7  assemble design doc ............. requirement-to-spec format; +Setup Da
 Phase 7b setup-files change list ......... file-by-file changes in the sibling setup-files repo
 Phase 8  spec-to-tasklist ............... wave-grouped JSON; one task per object AND one per pseudo-test
 Phase 9  Output + handoff to build ....... report artifacts + questions.json; two PRs expected
+Revision Follow-up round ............... answers arrived and a plan exists: re-plan only what they touch
 ```
 
 ## Output contract (read this first when running headless)
@@ -179,6 +180,35 @@ Report all artifacts (design doc path + task list path + `questions.json` path) 
 State plainly whether the plan is **complete** (both `questions.json` arrays empty) or **waiting on answers**. An orchestrator branches on exactly that.
 
 **Handoff to build (the planner does not run it — rule 1, plan-only).** The build phase that consumes the task list opens by provisioning a test environment via the `continia-env-setup` skill, then `continia-deps` → `continia-deploy` → `continia-test`, and ends with **two pull requests** — one on continia-banking for the AL work, one on setup-files for the config. End the summary with: `Next: provision env (continia-env-setup), then build wave 1. Expect 2 PRs.`
+
+## Follow-up round (revision mode)
+
+Use this instead of Phases 0–9 when the caller says the previous round already produced a plan
+and new answers have arrived. Re-running every phase to absorb a few answers costs as much as
+the first round. Revision keeps the parts the answers do not touch.
+
+1. **Read what exists.** The answers (newest comments first), the previous round's questions,
+   the existing design doc, the task list, and any planner working files (fragments, verdicts)
+   beside them.
+2. **Decide whether revision is enough.** An answer that changes the plan's foundation — a
+   different auth flow, a different reference bank, a different set of file types in or out —
+   invalidates too much to patch. Then run Phases 0–9 in full and record
+   `revisionMode: "full"` with the reason.
+3. **Map answers to scope.** For each answer, list the domains (auth, export, import, assisted
+   setup), design-doc sections, test-plan entries, setup-data entries and tasks it affects. An
+   answer that only confirms a default the plan already took changes nothing but the questions.
+4. **Re-plan only the affected domains.** Re-dispatch each affected domain's planner with its
+   prior fragment (or the matching design-doc section if no fragment survives) plus the answers
+   that touch it. Then run **one** `plan-verifier` pass on each revised fragment. Rule 4 still
+   holds: nothing revised reaches the design doc without being challenged. Domains no answer
+   touches are not re-planned or re-verified.
+5. **Patch, do not rewrite.** Update only the affected sections of the design doc, test plan
+   and setup data. In the task list, change, add or remove only the affected tasks. Keep the
+   ids of unchanged tasks, and keep every object id already reserved. Reserve ids (rule 5) only
+   for objects that are new in this round.
+6. **Write the outputs.** A fresh `questions.json` with resolved items removed and anything
+   still open kept. `artifacts.json` with `revisionMode: "incremental"` and a `revisionReason`
+   naming which answers changed which sections. Then the Phase 9 summary as usual.
 
 ## References
 

@@ -1297,3 +1297,50 @@ describe('planning artifact guards', () => {
     expect(questions.blocking).toHaveLength(1);
   });
 });
+
+describe('follow-up rounds', () => {
+  async function roundCtx(clarifyRounds: number, existingDesignDoc: boolean) {
+    const deps = makeDeps({ questions: CLEAN_PLAN });
+    const cfg = config();
+    const worktrees = await prepareWorkspaces(cfg, mockWorkItem(), 'b', deps);
+    const paths = pathsFor(worktrees.banking);
+    mkdirSync(join(worktrees.banking, '.agent', 'plan'), { recursive: true });
+    writeFileSync(paths.questionsPath, JSON.stringify(OPEN_PLAN), 'utf-8');
+    if (existingDesignDoc) writeFileSync(paths.designDocPath, '# Earlier plan', 'utf-8');
+    store.update(TEST_ITEM_ID, { clarifyRounds });
+    const ctx: PhaseContext = {
+      config: cfg,
+      item: mockWorkItem(),
+      job: store.ensure(TEST_ITEM_ID),
+      store,
+      deps,
+      branch: 'b',
+      worktrees,
+      paths,
+      comments: [],
+      workItemContext: 'context',
+    };
+    await runPlanningPhase(ctx);
+    return String((deps.runAgent as ReturnType<typeof mock>).mock.calls[0]![1]);
+  }
+
+  test('revises the existing plan when a design doc is already there', async () => {
+    const prompt = await roundCtx(1, true);
+    expect(prompt).toContain('revision mode');
+    expect(prompt).not.toContain('run it to completion');
+    expect(prompt).toContain('"revisionMode"');
+  });
+
+  test('plans in full when the previous round stopped at the Phase 1 gate', async () => {
+    const prompt = await roundCtx(1, false);
+    expect(prompt).toContain('run it to completion');
+    expect(prompt).toContain('This is a follow-up round');
+    expect(prompt).not.toContain('revision mode');
+  });
+
+  test('plans in full on the first round even if a stale design doc exists', async () => {
+    const prompt = await roundCtx(0, true);
+    expect(prompt).toContain('run it to completion');
+    expect(prompt).not.toContain('revision mode');
+  });
+});

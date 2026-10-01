@@ -254,6 +254,11 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
 
   const previousQuestions = deps.readJsonArtifact<PlanQuestions>(paths.questionsPath);
 
+  // A follow-up round whose previous round got past the Phase 1 gate has a
+  // design doc to revise. The first round, or one after a gate, plans in full.
+  const mode = job.clarifyRounds > 0 && existsSync(paths.designDocPath) ? 'revision' : 'full';
+  if (mode === 'revision') log(`  Item #${item.id}: revising the existing plan with the new answers`);
+
   const prompt = prompts.buildPlanningPrompt(
     config,
     ctx.workItemContext,
@@ -261,6 +266,7 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
     ctx.worktrees.banking,
     ctx.worktrees.setupFiles,
     job.clarifyRounds > 0 ? previousQuestions : undefined,
+    mode,
   );
 
   // The previous round's questions are in the prompt now. Removing the file

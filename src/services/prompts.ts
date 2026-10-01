@@ -114,6 +114,11 @@ export function buildPlanningPrompt(
   bankingWorktree: string,
   setupFilesWorktree: string,
   previousQuestions?: PlanQuestions,
+  /**
+   * 'revision' when a follow-up round finds the previous round's plan on
+   * disk: the planner patches that plan instead of re-running every phase.
+   */
+  mode: 'full' | 'revision' = 'full',
 ): string {
   const followUp =
     previousQuestions &&
@@ -146,13 +151,7 @@ Both paths are also recorded in \`.claude/repo-paths.json\` as \`continia-bankin
 
 ## What to do
 
-Invoke the **bank-integration-planner** skill and run it to completion. Give it the
-work item content above as its Phase 0 inputs, and use this output path for its
-artifacts:
-
-- design doc  → \`${paths.designDocPath}\`
-- task list   → \`${paths.taskListPath}\`
-- questions   → \`${paths.questionsPath}\`
+${mode === 'revision' ? revisionInstructions(paths) : fullPlanInstructions(paths)}
 
 The planner is plan-only: do **not** write any AL code, edit any setup JSON, or
 create any branch in this phase.
@@ -183,7 +182,7 @@ create any branch in this phase.
   "taskListPath": "${paths.taskListPath}",
   "objectCount": 0,
   "testCount": 0,
-  "waveCount": 0
+  "waveCount": 0${mode === 'revision' ? REVISION_ARTIFACT_FIELDS : ''}
 }
 \`\`\`
 
@@ -194,6 +193,42 @@ exactly. Write them even if the planner gated at Phase 1 — in that case
 When you are done, reply with a two-line summary: bank name, and whether the plan
 is complete or waiting on answers.`;
 }
+
+function fullPlanInstructions(paths: PhasePaths): string {
+  return `Invoke the **bank-integration-planner** skill and run it to completion. Give it the
+work item content above as its Phase 0 inputs, and use this output path for its
+artifacts:
+
+- design doc  → \`${paths.designDocPath}\`
+- task list   → \`${paths.taskListPath}\`
+- questions   → \`${paths.questionsPath}\``;
+}
+
+/**
+ * A full re-plan costs as much as the first round (~$32 on #83634) to absorb a
+ * handful of answers. The previous round's plan is on disk, so revise it.
+ */
+function revisionInstructions(paths: PhasePaths): string {
+  return `The previous round already produced a plan. Do **not** re-run the
+**bank-integration-planner** skill from Phase 0. Follow its "Follow-up round (revision mode)"
+section instead: apply the new answers to the existing plan and revise only what they affect.
+
+The existing plan, which you revise in place:
+
+- design doc  → \`${paths.designDocPath}\`
+- task list   → \`${paths.taskListPath}\`
+- questions   → the previous round's are in the follow-up section above; write the new ones
+  to \`${paths.questionsPath}\`
+- planner working files (fragments, verdicts), if any → \`${paths.agentDir}/plan/\`
+
+If an answer changes the plan's foundation (a different auth flow, reference bank or set of
+file types), say so and run the skill in full instead. Record which you did in
+\`revisionMode\` below.`;
+}
+
+const REVISION_ARTIFACT_FIELDS = `,
+  "revisionMode": "incremental | full",
+  "revisionReason": "which answers changed which sections, or why a full re-plan was needed"`;
 
 export function buildImplementPrompt(
   config: AppConfig,

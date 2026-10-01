@@ -256,6 +256,9 @@ export interface PlanArtifacts {
   objectCount?: number;
   testCount?: number;
   waveCount?: number;
+  /** Follow-up rounds only: whether the planner patched the plan or re-planned it. */
+  revisionMode?: 'incremental' | 'full';
+  revisionReason?: string;
 }
 
 /** Structured result of the verify phase. */
