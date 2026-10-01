@@ -21,6 +21,7 @@
 |---|---|---|---|---|---|---|---|
 | opus-haiku-subs | $13.72 | 43% | Haiku $4.90 | 131 | 44.7 min | major-gaps | 4/3/4/4/3 |
 | opus-high | $31.98 | 100% | inside Opus $31.97 | 90 | 54.2 min | baseline | — |
+| opus-med (effort medium) | $33.49 | 105% | inside Opus | 64 | 53.0 min | incomplete | — |
 | opus-sonnet-subs | $44.79 | 140% | Sonnet $39.25 | 83 | 82.9 min | better | 5/4/4/4/2 |
 
 Judging cost $0.31–0.32 per verdict. Total experiment spend: $91.12.
@@ -55,6 +56,14 @@ weaknesses:
 - A heavier plan: it changes the shared `IAccStmtMarker` interface and adds conditional objects.
 - Some invented conventions, such as the `file-name` format.
 
+**opus-med: incomplete.** At medium effort, the orchestrator ended its session after the test
+plan ("Enough verified. Writing the test plan.") and never wrote the design doc, task list or
+`questions.json`. It still spent $33.49. The pipeline counted the missing `questions.json` as
+"no questions", so the variant first showed as `ok` and was judged against an empty folder. In
+production the job would have gone on to implement with no task list. Planning now fails when
+`questions.json` is missing, or when an unblocked plan has no task list. The experiment reports
+such a variant as `incomplete`.
+
 ## How far to trust this
 
 - **One sample per variant.** Agent runs are noisy, and these differences may not reproduce.
@@ -73,8 +82,8 @@ weaknesses:
   item. Sonnet's subagents produced about twice the output of Opus's (1.0M against 482k tokens for
   the whole baseline run), which more than cancels the lower per-token price. Fan-out volume, not
   model price, drives planning cost.
+- **Do not lower the orchestrator's effort.** `opus-med` cost the same and did not finish.
 - **Next experiments:**
-  - Lower effort on the orchestrator (`opus-med`).
   - A cap on subagent fan-out in the planner skill.
   - A second sample of `opus-high` and `opus-haiku-subs`, to size the noise before any decision.
 
