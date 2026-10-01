@@ -513,3 +513,24 @@ describe('runAgent AL language server', () => {
     expect(options.allowedTools).not.toContain('LSP');
   });
 });
+
+describe('runAgent session resume', () => {
+  test('passes resumeSessionId to the SDK as resume', async () => {
+    const seen: { params?: any } = {};
+    await runAgent(
+      mockConfig(),
+      'continue',
+      { cwd: dir, logFile: join(dir, 'run.log'), resumeSessionId: 'sess-1' },
+      ((params: unknown) => {
+        seen.params = params;
+        return (async function* () {
+          yield {
+            type: 'result', subtype: 'success', result: 'x', session_id: 'sess-1', total_cost_usd: 0,
+            num_turns: 1, duration_ms: 1, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {},
+          };
+        })();
+      }) as never,
+    );
+    expect(seen.params.options.resume).toBe('sess-1');
+  });
+});

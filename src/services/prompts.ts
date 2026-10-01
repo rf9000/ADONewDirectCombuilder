@@ -234,6 +234,23 @@ Subagents share this session's server, so once it answers you, it answers them.
 - Read a file only once LSP has told you which lines matter.
 `;
 
+/** Resumes a planning session that ended before writing its artifacts. */
+export function buildPlanningNudge(paths: PhasePaths): string {
+  return `You stopped before finishing: the planning job is not complete, because
+\`${paths.questionsPath}\` does not exist yet.
+
+Continue from where you stopped. Do not start over. Wait for any subagent you dispatched,
+finish the remaining bank-integration-planner phases, and write every required artifact
+exactly as the original instructions specify:
+
+- design doc → \`${paths.designDocPath}\`
+- task list → \`${paths.taskListPath}\`
+- questions → \`${paths.questionsPath}\`
+- artifacts → \`${paths.artifactsPath}\`
+
+Then reply with the two-line summary the original instructions ask for.`;
+}
+
 function fullPlanInstructions(paths: PhasePaths): string {
   return `Invoke the **bank-integration-planner** skill and run it to completion. Give it the
 work item content above as its Phase 0 inputs, and use this output path for its

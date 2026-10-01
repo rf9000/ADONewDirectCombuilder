@@ -39,6 +39,8 @@ export interface AgentRunOptions extends AgentOverrides {
   logFile: string;
   /** Override the configured turn cap for cheap phases. */
   maxTurns?: number;
+  /** Continue this earlier session instead of starting a new one. */
+  resumeSessionId?: string;
   /**
    * Spend cap in USD for this run, passed to the SDK as `maxBudgetUsd`.
    * Defaults to `config.agentMaxBudgetUsd`; the pipeline lowers it to what is
@@ -220,6 +222,7 @@ export async function runAgent(
       prompt,
       options: {
         model: options.model ?? config.claudeModel,
+        ...(options.resumeSessionId ? { resume: options.resumeSessionId } : {}),
         ...(options.effort ? { effort: options.effort } : {}),
         ...(env ? { env } : {}),
         cwd: options.cwd,

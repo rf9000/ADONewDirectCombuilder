@@ -1392,3 +1392,64 @@ describe('planning with the AL language server', () => {
     expect(await planPrompt({ alLspPluginDir: '/opt/al-lsp' }, false)).not.toContain('AL language server');
   });
 });
+
+describe('planning that stops before its output phase', () => {
+  /** A planner that ends its session early `stopsFor` times, then finishes when nudged. */
+  function stoppingDeps(stopsFor: number) {
+    const deps = makeDeps({ questions: CLEAN_PLAN });
+    let calls = 0;
+    (deps as { runAgent: unknown }).runAgent = mock(
+      (_cfg: unknown, _prompt: string, options: { cwd: string; resumeSessionId?: string }) => {
+        calls += 1;
+        if (calls > stopsFor) {
+          const planDir = join(options.cwd, '.agent', 'plan');
+          mkdirSync(planDir, { recursive: true });
+          writeFileSync(join(planDir, 'questions.json'), JSON.stringify(CLEAN_PLAN), 'utf-8');
+          writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
+        }
+        return Promise.resolve({ text: 'Writing the test plan now.', success: true, costUsd: 2, numTurns: 5, sessionId: 'sess-1' });
+      },
+    );
+    return deps;
+  }
+
+  async function ctxFor(deps: PipelineDeps): Promise<PhaseContext> {
+    const cfg = config();
+    const worktrees = await prepareWorkspaces(cfg, mockWorkItem(), 'b', deps);
+    return {
+      config: cfg,
+      item: mockWorkItem(),
+      job: store.ensure(TEST_ITEM_ID),
+      store,
+      deps,
+      branch: 'b',
+      worktrees,
+      paths: pathsFor(worktrees.banking),
+      comments: [],
+      workItemContext: 'context',
+    };
+  }
+
+  test('resumes the same session with a nudge and accepts the finished plan', async () => {
+    const deps = stoppingDeps(1);
+    await runPlanningPhase(await ctxFor(deps));
+    const calls = (deps.runAgent as ReturnType<typeof mock>).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1]![2].resumeSessionId).toBe('sess-1');
+    expect(String(calls[1]![1])).toContain('You stopped before finishing');
+    // Both runs count against the job's budget.
+    expect(store.get(TEST_ITEM_ID)!.spentUsd).toBe(4);
+  });
+
+  test('gives up after two nudges', async () => {
+    const deps = stoppingDeps(99);
+    await expect(runPlanningPhase(await ctxFor(deps))).rejects.toThrow('wrote no questions.json');
+    expect((deps.runAgent as ReturnType<typeof mock>).mock.calls).toHaveLength(3);
+  });
+
+  test('does not nudge a run that already wrote its artifacts', async () => {
+    const deps = stoppingDeps(0);
+    await runPlanningPhase(await ctxFor(deps));
+    expect((deps.runAgent as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+  });
+});

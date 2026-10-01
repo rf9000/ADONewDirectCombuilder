@@ -23,6 +23,9 @@ import * as prompts from './prompts.ts';
 import { resolveEntryPhase } from './entry-phase.ts';
 import type { PhaseInputs } from './entry-phase.ts';
 
+/** Times a planning session that stopped early is resumed before it fails. */
+const MAX_PLANNING_NUDGES = 2;
+
 /** Artifacts live here inside the banking worktree; git-excluded, never committed. */
 const AGENT_DIR = '.agent';
 
@@ -191,6 +194,7 @@ async function runPhaseAgent(
   phase: string,
   prompt: string,
   logFile: string,
+  extra: Partial<runner.AgentRunOptions> = {},
 ): Promise<AgentRunResult> {
   const { config, item, store, deps } = ctx;
   const spent = store.get(item.id)?.spentUsd ?? 0;
@@ -211,6 +215,7 @@ async function runPhaseAgent(
     logFile,
     maxBudgetUsd: budgetUsd,
     ...ctx.agentOverrides,
+    ...extra,
   });
 
   const total = spent + result.costUsd;
@@ -276,12 +281,34 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
   // as its answer.
   rmSync(paths.questionsPath, { force: true });
 
-  const result = await runPhaseAgent(
+  let result = await runPhaseAgent(
     ctx,
     'planning',
     prompt,
     logPath(config, item.id, `plan-${job.clarifyRounds + 1}`),
   );
+
+  // Headless, the planner sometimes ends its turn right after announcing the
+  // next phase ("Writing the test plan now.") with nobody to nudge it. The
+  // session's context is cached, so resuming it to finish costs a fraction of
+  // planning again; the artifact checks below still reject a run that never
+  // finishes.
+  for (
+    let nudge = 1;
+    nudge <= MAX_PLANNING_NUDGES &&
+    result.sessionId !== undefined &&
+    deps.readJsonArtifact(paths.questionsPath) === undefined;
+    nudge++
+  ) {
+    log(`  Item #${item.id}: planning stopped before writing its artifacts — resuming it (nudge ${nudge})`);
+    result = await runPhaseAgent(
+      ctx,
+      'planning',
+      prompts.buildPlanningNudge(paths),
+      logPath(config, item.id, `plan-${job.clarifyRounds + 1}-nudge-${nudge}`),
+      { resumeSessionId: result.sessionId },
+    );
+  }
 
   const artifacts = deps.readJsonArtifact<PlanArtifacts>(paths.artifactsPath);
   const written = deps.readJsonArtifact<PlanQuestions>(paths.questionsPath);
