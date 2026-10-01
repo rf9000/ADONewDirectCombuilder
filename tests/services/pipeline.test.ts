@@ -1379,6 +1379,9 @@ describe('planning with the AL language server', () => {
     const prompt = await planPrompt({ alLspPluginDir: '/opt/al-lsp' });
     expect(prompt).toContain('Before your first Grep, Bash search or subagent dispatch');
     expect(prompt).toContain('until it returns results');
+    // documentSymbol is what loads the project; workspaceSymbol alone never warms it.
+    expect(prompt.indexOf('documentSymbol` on')).toBeGreaterThan(-1);
+    expect(prompt.indexOf('documentSymbol` on')).toBeLessThan(prompt.indexOf('Then `workspaceSymbol`'));
   });
 
   test('says nothing about LSP when it is not configured', async () => {

@@ -209,11 +209,15 @@ const AL_LSP_SECTION = `
 The \`LSP\` tool is available, backed by the AL language server.
 **Pass this section on to every subagent you dispatch**, word for word, so they use it too.
 
-**Warm it up first.** Before your first Grep, Bash search or subagent dispatch, call
-\`workspaceSymbol\` for "ABNAMRO" and repeat it — with \`sleep 20\` in Bash between tries, up to
-10 tries — until it returns results. The server indexes the whole workspace when it starts, and
-early calls return nothing or "server is starting". Subagents share this session's server, so
-once it answers you, it answers them.
+**Warm it up first.** Before your first Grep, Bash search or subagent dispatch:
+
+1. Call \`documentSymbol\` on \`base-application/Logging/Codeunits/RequestEntryID.Codeunit.al\`.
+   Opening a file is what makes the server load the project; \`workspaceSymbol\` alone never
+   does. If it says "server is starting", run \`sleep 10\` in Bash and retry.
+2. Then \`workspaceSymbol\` for "ABNAMRO", repeated with \`sleep 20\` between tries (up to 6)
+   until it returns results. Measured on this repo: ready about 30 seconds after step 1.
+
+Subagents share this session's server, so once it answers you, it answers them.
 
 - Use LSP before Grep or Bash for AL symbols:
   - \`workspaceSymbol\` to find objects by name (for example "ABNAMRO").
