@@ -329,10 +329,11 @@ describe('runExperiment', () => {
     expect(r.variants[1]!.status).toBe('ok');
   });
 
-  test('writes usage.json even when the planner leaves no plan directory', async () => {
+  test('marks a planner that left no plan as incomplete and does not judge it', async () => {
     const r = await runExperiment(config(), opts(), deps({ noPlanDirFor: 'claude-sonnet-5-5' }));
     const sonnet = r.variants.find((v) => v.variant === 'sonnet')!;
-    expect(sonnet).toMatchObject({ status: 'ok', designDoc: false, blocking: 0, ambiguities: 0 });
+    expect(sonnet).toMatchObject({ status: 'incomplete', designDoc: false, costUsd: 10 });
+    expect(r.judges).toEqual([]);
   });
 
   test('records a judge that writes nothing', async () => {

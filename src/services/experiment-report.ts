@@ -8,7 +8,13 @@ import { formatTokens } from './agent-runner.ts';
 import type { FrozenDoc } from './experiment-input.ts';
 import type { JudgeResult } from './experiment-judge.ts';
 
-export type VariantStatus = 'ok' | 'failed' | 'budget-stopped' | 'rate-limited' | 'context-overflow';
+export type VariantStatus =
+  | 'ok'
+  | 'incomplete'
+  | 'failed'
+  | 'budget-stopped'
+  | 'rate-limited'
+  | 'context-overflow';
 
 /** What one variant cost and produced. Written to <variant>/usage.json. */
 export interface VariantUsage {
@@ -50,6 +56,9 @@ export interface ExperimentResults {
 
 const CONTEXT_OVERFLOW = /prompt is too long|context window|context length/i;
 
+/** runPlanningPhase's wording when the agent finished without its output phase. */
+const PLAN_INCOMPLETE = /the plan is incomplete/;
+
 export function classifyStatus(
   result: AgentRunResult | undefined,
   error: string | undefined,
@@ -62,6 +71,7 @@ export function classifyStatus(
     return 'rate-limited';
   }
   if (result.subtype === 'error_max_budget_usd') return 'budget-stopped';
+  if (error && PLAN_INCOMPLETE.test(error)) return 'incomplete';
   if (!result.success && CONTEXT_OVERFLOW.test(`${result.text} ${error ?? ''}`)) {
     return 'context-overflow';
   }

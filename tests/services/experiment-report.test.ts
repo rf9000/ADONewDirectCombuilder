@@ -70,6 +70,10 @@ describe('classifyStatus', () => {
   // run still completed, so its plan must be judged, not discarded.
   test('ok when the run succeeded despite a rate-limit event', () =>
     expect(classifyStatus({ ...ok, rateLimit: { status: 'rejected' } }, undefined)).toBe('ok'));
+  test('incomplete when planning stopped before its output phase', () =>
+    expect(
+      classifyStatus(ok, 'Planning finished but wrote no questions.json — … so the plan is incomplete.'),
+    ).toBe('incomplete'));
   test('budget-stopped on the budget subtype', () =>
     expect(classifyStatus({ ...ok, success: false, subtype: 'error_max_budget_usd' }, 'x')).toBe('budget-stopped'));
   test('context-overflow on a too-long prompt', () =>

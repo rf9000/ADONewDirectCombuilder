@@ -80,6 +80,8 @@ interface FakeOptions {
   implementText?: string;
   changedRepos?: Array<'banking' | 'setupFiles'>;
   failPhase?: string;
+  /** Plan files the fake planner leaves out, as a planner that stopped early would. */
+  omitPlanFiles?: string[];
 }
 
 function makeDeps(fake: FakeOptions = {}): PipelineDeps {
@@ -166,6 +168,7 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
         // Task 5's dispatch gates entry at 'implementing' on this file's
         // presence, so a real planning run must leave it behind.
         writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
+        for (const file of fake.omitPlanFiles ?? []) rmSync(join(planDir, file), { force: true });
       }
 
       if (isVerify) {
@@ -506,6 +509,8 @@ describe('runJob — failures', () => {
             JSON.stringify(CLEAN_PLAN),
             'utf-8',
           );
+          // A complete plan; without it planning itself now fails, before verify.
+          writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
         }
         return Promise.resolve({
           text: 'ok',
@@ -1242,5 +1247,53 @@ describe('experiment hooks', () => {
     await prepareWorkspaces(config(), mockWorkItem(), 'b', deps);
     const calls = (deps.createWorktree as ReturnType<typeof mock>).mock.calls;
     expect(calls[0]![4]).toBeUndefined();
+  });
+});
+
+
+describe('planning artifact guards', () => {
+  async function planningCtx(fake: FakeOptions, clarifyRounds = 0): Promise<PhaseContext> {
+    const deps = makeDeps(fake);
+    const cfg = config();
+    const worktrees = await prepareWorkspaces(cfg, mockWorkItem(), 'b', deps);
+    store.update(TEST_ITEM_ID, { clarifyRounds });
+    return {
+      config: cfg,
+      item: mockWorkItem(),
+      job: store.ensure(TEST_ITEM_ID),
+      store,
+      deps,
+      branch: 'b',
+      worktrees,
+      paths: pathsFor(worktrees.banking),
+      comments: [],
+      workItemContext: 'context',
+    };
+  }
+
+  test('fails when the planner wrote no questions.json', async () => {
+    const ctx = await planningCtx({ omitPlanFiles: ['questions.json'] });
+    await expect(runPlanningPhase(ctx)).rejects.toThrow('wrote no questions.json');
+  });
+
+  test('fails when a follow-up round leaves only an earlier questions.json', async () => {
+    const ctx = await planningCtx({ omitPlanFiles: ['questions.json'] }, 1);
+    mkdirSync(join(ctx.worktrees.banking, '.agent', 'plan'), { recursive: true });
+    writeFileSync(ctx.paths.questionsPath, JSON.stringify(OPEN_PLAN), 'utf-8');
+    await expect(runPlanningPhase(ctx)).rejects.toThrow('wrote no questions.json');
+  });
+
+  test('fails when a plan with no blocking questions has no task list', async () => {
+    const ctx = await planningCtx({ questions: CLEAN_PLAN, omitPlanFiles: ['tasklist.json'] });
+    await expect(runPlanningPhase(ctx)).rejects.toThrow('no task list');
+  });
+
+  test('accepts a Phase 1 gate: blocking questions and no plan yet', async () => {
+    const ctx = await planningCtx({
+      questions: OPEN_PLAN,
+      omitPlanFiles: ['tasklist.json', 'design-doc.md'],
+    });
+    const questions = await runPlanningPhase(ctx);
+    expect(questions.blocking).toHaveLength(1);
   });
 });

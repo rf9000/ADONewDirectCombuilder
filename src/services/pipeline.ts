@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type {
   AgentOverrides,
@@ -263,6 +263,11 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
     job.clarifyRounds > 0 ? previousQuestions : undefined,
   );
 
+  // The previous round's questions are in the prompt now. Removing the file
+  // means a run that stops before writing its own cannot pass the old one off
+  // as its answer.
+  rmSync(paths.questionsPath, { force: true });
+
   const result = await runPhaseAgent(
     ctx,
     'planning',
@@ -271,11 +276,30 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
   );
 
   const artifacts = deps.readJsonArtifact<PlanArtifacts>(paths.artifactsPath);
-  const questions =
-    deps.readJsonArtifact<PlanQuestions>(paths.questionsPath) ?? {
-      blocking: [],
-      ambiguities: [],
-    };
+  const written = deps.readJsonArtifact<PlanQuestions>(paths.questionsPath);
+
+  // A planner can end its session before the last phases — one stopped right
+  // after the test plan and still reported success. The prompt requires
+  // questions.json on every run, so its absence means the plan is unfinished,
+  // and "no questions" would otherwise send an empty plan on to implement.
+  if (!written) {
+    throw new Error(
+      'Planning finished but wrote no questions.json — the planner stopped before ' +
+        'its output phase, so the plan is incomplete.',
+    );
+  }
+  const questions: PlanQuestions = {
+    blocking: written.blocking ?? [],
+    ambiguities: written.ambiguities ?? [],
+  };
+  // Blocking questions with no plan is the Phase 1 gate. A plan that claims to
+  // be unblocked must have produced the task list implement builds from.
+  if (questions.blocking.length === 0 && deps.readJsonArtifact(paths.taskListPath) === undefined) {
+    throw new Error(
+      'Planning reported no blocking questions but left no task list at ' +
+        `${paths.taskListPath} — the plan is incomplete.`,
+    );
+  }
 
   // The watermark is the newest *unmarked* comment at plan time, not simply
   // the newest comment — our own questions/failure/success comments must
