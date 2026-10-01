@@ -55,6 +55,8 @@ function writeVariants(extra: Record<string, unknown> = {}): string {
 interface Fake {
   rateLimitOn?: string;
   noPlanDirFor?: string;
+  /** Model whose planner stops at the Phase 1 gate: blocking questions, no plan. */
+  gateFor?: string;
   worktreeFailsOnFirstCall?: boolean;
   judgeWritesNothing?: boolean;
   revisionMode?: string;
@@ -112,6 +114,13 @@ function deps(fake: Fake = {}): ExperimentDeps & {
         subtype: 'error_during_execution',
         rateLimit: { status: 'rejected' as const, type: 'five_hour', resetsAt: 1700000000 },
       });
+    }
+
+    if (fake.gateFor === model) {
+      const planDir = join(options.cwd, '.agent', 'plan');
+      mkdirSync(planDir, { recursive: true });
+      writeFileSync(join(planDir, 'questions.json'), JSON.stringify({ blocking: [{ question: 'Where is the signing URL?' }], ambiguities: [] }));
+      return Promise.resolve(base);
     }
 
     if (fake.noPlanDirFor !== model) {
@@ -497,6 +506,22 @@ describe('runExperiment', () => {
     const plans = d.runAgent.mock.calls.filter((c) => String(c[1]).includes('bank-integration-planner'));
     expect(plans[0]![2].lsp).toBe(false);
     expect(plans[1]![2].lsp).toBe(true);
+  });
+
+  test('marks a variant that stopped at the Phase 1 gate as gated and does not judge it', async () => {
+    const d = deps({ gateFor: 'claude-sonnet-5-5' });
+    const r = await runExperiment(config(), opts(), d);
+    expect(r.variants.find((v) => v.variant === 'sonnet')).toMatchObject({ status: 'gated', blocking: 1, designDoc: false });
+    expect(r.judges).toEqual([]);
+    expect(d.runAgent.mock.calls.some((c) => String(c[1]).includes('You are reviewing'))).toBe(false);
+  });
+
+  test('--resume reruns a variant that was gated', async () => {
+    const r1 = await runExperiment(config(), opts(), deps({ gateFor: 'claude-sonnet-5-5' }));
+    const d = deps();
+    const r = await runExperiment(config(), opts({ resumeRunId: r1.runId }), d);
+    expect(r.variants.find((v) => v.variant === 'sonnet')!.status).toBe('ok');
+    expect(r.judges.map((j) => j.variant)).toEqual(['sonnet']);
   });
 
   test('answers and previous questions make it a follow-up round', async () => {

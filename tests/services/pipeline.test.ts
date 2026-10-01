@@ -1375,6 +1375,12 @@ describe('planning with the AL language server', () => {
     expect(prompt).toContain('interface member');
   });
 
+  test('makes the orchestrator warm the server up before any grep or dispatch', async () => {
+    const prompt = await planPrompt({ alLspPluginDir: '/opt/al-lsp' });
+    expect(prompt).toContain('Before your first Grep, Bash search or subagent dispatch');
+    expect(prompt).toContain('until it returns results');
+  });
+
   test('says nothing about LSP when it is not configured', async () => {
     expect(await planPrompt({})).not.toContain('AL language server');
   });

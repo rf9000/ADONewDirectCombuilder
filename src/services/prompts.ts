@@ -209,6 +209,12 @@ const AL_LSP_SECTION = `
 The \`LSP\` tool is available, backed by the AL language server.
 **Pass this section on to every subagent you dispatch**, word for word, so they use it too.
 
+**Warm it up first.** Before your first Grep, Bash search or subagent dispatch, call
+\`workspaceSymbol\` for "ABNAMRO" and repeat it — with \`sleep 20\` in Bash between tries, up to
+10 tries — until it returns results. The server indexes the whole workspace when it starts, and
+early calls return nothing or "server is starting". Subagents share this session's server, so
+once it answers you, it answers them.
+
 - Use LSP before Grep or Bash for AL symbols:
   - \`workspaceSymbol\` to find objects by name (for example "ABNAMRO").
   - \`goToImplementation\` on an interface to find "who implements X".

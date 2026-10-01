@@ -282,12 +282,17 @@ async function runVariant(
     designDoc = existsSync(paths.designDocPath);
   }
 
+  // Stopping at the Phase 1 gate is a valid planner outcome, but there is no
+  // plan to compare, and gating varies from run to run on the same input.
+  const classified = classifyStatus(last, error);
+  const gated = classified === 'ok' && questions.blocking.length > 0 && !designDoc;
+
   const usage: VariantUsage = {
     variant: variant.name,
     model: variant.model ?? config.claudeModel,
     effort: variant.effort,
     subagentModel: variant.subagentModel,
-    status: classifyStatus(last, error),
+    status: gated ? 'gated' : classified,
     error,
     costUsd: last?.costUsd ?? 0,
     modelUsage: last?.modelUsage ?? {},

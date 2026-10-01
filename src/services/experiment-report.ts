@@ -10,6 +10,7 @@ import type { JudgeResult } from './experiment-judge.ts';
 
 export type VariantStatus =
   | 'ok'
+  | 'gated'
   | 'incomplete'
   | 'failed'
   | 'budget-stopped'
@@ -134,9 +135,9 @@ export function renderReport(r: ExperimentResults): string {
     warnings.push(`> API doc download failed: ${d.url} — ${d.error}`);
   }
   for (const note of r.notes) warnings.push(`> ${note}`);
-  for (const v of r.variants.filter((v) => v.status === 'ok' && !v.designDoc)) {
+  for (const v of r.variants.filter((v) => v.status === 'gated' || (v.status === 'ok' && !v.designDoc))) {
     warnings.push(
-      `> \`${v.variant}\` stopped at questions (${v.blocking} blocking) without a design doc — only its questions were compared.`,
+      `> \`${v.variant}\` stopped at questions (${v.blocking} blocking) without a design doc — it was not judged.`,
     );
   }
   if (warnings.length > 0) lines.push('', ...warnings.flatMap((w) => [w, '']));
