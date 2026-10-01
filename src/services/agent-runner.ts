@@ -195,7 +195,13 @@ export async function runAgent(
   // MCP servers: this repo's .mcp.json carries an ADO PAT.
   const useMcp = options.mcp !== false && options.allowedTools === undefined;
   const mcpServers = useMcp ? loadMcpServers(options.cwd) : {};
-  const allowedTools = withMcpTools(options.allowedTools ?? ALLOWED_TOOLS, mcpServers);
+  // The language server answers symbol and reference questions that agents
+  // otherwise grep the AL tree for, one subagent after another.
+  const useLsp = !!config.alLspPluginDir && options.lsp !== false && options.allowedTools === undefined;
+  const allowedTools = withMcpTools(
+    options.allowedTools ?? (useLsp ? [...ALLOWED_TOOLS, 'LSP'] : ALLOWED_TOOLS),
+    mcpServers,
+  );
   const env = buildChildEnv(options);
 
   let text = '';
@@ -226,6 +232,7 @@ export async function runAgent(
         // on its own.
         ...(options.allowedTools ? { tools: options.allowedTools } : {}),
         ...(useMcp ? {} : { strictMcpConfig: true }),
+        ...(useLsp ? { plugins: [{ type: 'local' as const, path: config.alLspPluginDir! }] } : {}),
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         maxTurns: options.maxTurns ?? config.agentMaxTurns,

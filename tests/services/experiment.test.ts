@@ -480,6 +480,25 @@ describe('runExperiment', () => {
     expect(d.runAgent.mock.calls).toHaveLength(0);
   });
 
+  test('turns the AL language server on only for variants that ask for it', async () => {
+    const d = deps();
+    await runExperiment(
+      config(),
+      opts({
+        variantsFile: writeVariants({
+          variants: [
+            { name: 'opus', model: 'claude-opus-5-5' },
+            { name: 'sonnet', model: 'claude-opus-5-5', lsp: true },
+          ],
+        }),
+      }),
+      d,
+    );
+    const plans = d.runAgent.mock.calls.filter((c) => String(c[1]).includes('bank-integration-planner'));
+    expect(plans[0]![2].lsp).toBe(false);
+    expect(plans[1]![2].lsp).toBe(true);
+  });
+
   test('answers and previous questions make it a follow-up round', async () => {
     writeFileSync(join(root, 'answers.md'), 'Use the sandbox.');
     writeFileSync(join(root, 'questions.json'), JSON.stringify({ blocking: [{ question: 'Sandbox?' }], ambiguities: [] }));

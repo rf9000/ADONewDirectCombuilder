@@ -58,6 +58,9 @@ const envSchema = z.object({
   // cumulative across rounds and retries and is enforced by the pipeline.
   AGENT_MAX_BUDGET_USD: z.coerce.number().positive().default(60),
   JOB_MAX_BUDGET_USD: z.coerce.number().positive().default(150),
+  // Plugin folder holding the AL language server (e.g. the claude-code-lsps
+  // al-language-server-go-* plugin). Empty keeps agents on grep alone.
+  AL_LSP_PLUGIN_DIR: z.string().default(""),
 
   // --- Repositories ---
   BANKING_REPO_NAME: z.string().default("Continia Banking"),
@@ -147,6 +150,7 @@ export function loadConfig(
     agentMaxTurns: parsed.AGENT_MAX_TURNS,
     agentMaxBudgetUsd: parsed.AGENT_MAX_BUDGET_USD,
     jobMaxBudgetUsd: parsed.JOB_MAX_BUDGET_USD,
+    alLspPluginDir: parsed.AL_LSP_PLUGIN_DIR.trim() || undefined,
 
     repos: {
       banking: {

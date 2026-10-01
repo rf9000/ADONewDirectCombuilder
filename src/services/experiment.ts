@@ -262,6 +262,7 @@ async function runVariant(
         subagentModel: variant.subagentModel,
         env: authEnv(auth),
         mcp: false,
+        lsp: variant.lsp ?? false,
       },
     };
 

@@ -14,6 +14,9 @@ const variantSchema = z.object({
   // With --from-plan: start from that plan and take the revision path. Variants
   // without it re-plan in full on the same questions and answers.
   revise: z.boolean().optional(),
+  // Load the AL language server (needs AL_LSP_PLUGIN_DIR). Off by default so a
+  // configured plugin never leaks into a baseline.
+  lsp: z.boolean().optional(),
 });
 
 const variantSetSchema = z

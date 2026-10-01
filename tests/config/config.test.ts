@@ -67,6 +67,12 @@ describe("loadConfig", () => {
     expect(() => loadConfig(env)).toThrow("ANTHROPIC_API_KEY");
   });
 
+  it("leaves the AL language server off unless a plugin folder is configured", () => {
+    expect(loadConfig(validEnv).alLspPluginDir).toBeUndefined();
+    expect(loadConfig({ ...validEnv, AL_LSP_PLUGIN_DIR: "  " }).alLspPluginDir).toBeUndefined();
+    expect(loadConfig({ ...validEnv, AL_LSP_PLUGIN_DIR: "/opt/al-lsp" }).alLspPluginDir).toBe("/opt/al-lsp");
+  });
+
   it("accepts a missing ANTHROPIC_API_KEY when the caller opts out", () => {
     const env = { ...validEnv };
     delete env.ANTHROPIC_API_KEY;

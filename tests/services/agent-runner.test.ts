@@ -468,3 +468,48 @@ describe('runAgent turn counting', () => {
     expect(res.costUsd).toBe(30);
   });
 });
+
+
+describe('runAgent AL language server', () => {
+  function capture(config: ReturnType<typeof mockConfig>, extra: Record<string, unknown> = {}) {
+    const seen: { params?: any } = {};
+    return runAgent(
+      config,
+      'hi',
+      { cwd: dir, logFile: join(dir, 'run.log'), ...extra },
+      ((params: unknown) => {
+        seen.params = params;
+        return (async function* () {
+          yield {
+            type: 'result', subtype: 'success', result: 'x', session_id: 's', total_cost_usd: 0,
+            num_turns: 1, duration_ms: 1, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {},
+          };
+        })();
+      }) as never,
+    ).then(() => seen.params.options);
+  }
+
+  test('loads the plugin and allows the LSP tool when a plugin folder is configured', async () => {
+    const options = await capture(mockConfig({ alLspPluginDir: '/opt/al-lsp' }));
+    expect(options.plugins).toEqual([{ type: 'local', path: '/opt/al-lsp' }]);
+    expect(options.allowedTools).toContain('LSP');
+  });
+
+  test('a run can opt out with lsp: false', async () => {
+    const options = await capture(mockConfig({ alLspPluginDir: '/opt/al-lsp' }), { lsp: false });
+    expect(options.plugins).toBeUndefined();
+    expect(options.allowedTools).not.toContain('LSP');
+  });
+
+  test('a restricted run (the judge) gets no language server', async () => {
+    const options = await capture(mockConfig({ alLspPluginDir: '/opt/al-lsp' }), { allowedTools: ['Read'] });
+    expect(options.plugins).toBeUndefined();
+    expect(options.tools).toEqual(['Read']);
+  });
+
+  test('production default: no plugin folder, no plugin, no LSP tool', async () => {
+    const options = await capture(mockConfig());
+    expect(options.plugins).toBeUndefined();
+    expect(options.allowedTools).not.toContain('LSP');
+  });
+});

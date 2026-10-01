@@ -45,6 +45,11 @@ export interface AppConfig {
   agentMaxBudgetUsd: number;
   /** Spend cap in USD across every agent run a job has ever made. */
   jobMaxBudgetUsd: number;
+  /**
+   * Folder of a Claude Code plugin that provides the AL language server. When
+   * set, agents load it and may use the LSP tool. Unset: no language server.
+   */
+  alLspPluginDir?: string;
 
   // --- Repositories ---
   repos: {
@@ -211,6 +216,8 @@ export interface AgentOverrides {
   env?: Record<string, string | undefined>;
   /** False loads no MCP servers. Defaults to true. */
   mcp?: boolean;
+  /** False keeps the AL language server out of this run even when configured. */
+  lsp?: boolean;
 }
 
 /** Outcome of one agent SDK run. */
