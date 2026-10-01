@@ -267,6 +267,8 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
     ctx.worktrees.setupFiles,
     job.clarifyRounds > 0 ? previousQuestions : undefined,
     mode,
+    // Same condition runAgent uses to load the language server.
+    !!config.alLspPluginDir && ctx.agentOverrides?.lsp !== false,
   );
 
   // The previous round's questions are in the prompt now. Removing the file

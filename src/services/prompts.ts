@@ -119,6 +119,8 @@ export function buildPlanningPrompt(
    * disk: the planner patches that plan instead of re-running every phase.
    */
   mode: 'full' | 'revision' = 'full',
+  /** True when the run has the AL language server (AL_LSP_PLUGIN_DIR). */
+  lsp = false,
 ): string {
   const followUp =
     previousQuestions &&
@@ -140,7 +142,7 @@ export function buildPlanningPrompt(
 
 ${context}
 ${followUp}
-
+${lsp ? AL_LSP_SECTION : ''}
 ## Repositories available to you
 
 - **continia-banking** (AL source, your working directory): \`${bankingWorktree}\`
@@ -193,6 +195,34 @@ exactly. Write them even if the planner gated at Phase 1 — in that case
 When you are done, reply with a two-line summary: bank name, and whether the plan
 is complete or waiting on answers.`;
 }
+
+/**
+ * Planner subagents grepped the AL tree hundreds of times per plan, each one
+ * rediscovering the same reference-bank and framework code. The language
+ * server answers those questions in one call. The rules below come from the
+ * 2026-10-01 spike: the server needs a moment to index, and calls made
+ * through an interface resolve to the interface member, not the codeunit.
+ */
+const AL_LSP_SECTION = `
+## AL language server
+
+The \`LSP\` tool is available, backed by the AL language server.
+**Pass this section on to every subagent you dispatch**, word for word, so they use it too.
+
+- Use LSP before Grep or Bash for AL symbols:
+  - \`workspaceSymbol\` to find objects by name (for example "ABNAMRO").
+  - \`goToImplementation\` on an interface to find "who implements X".
+  - \`documentSymbol\` to list a file's procedures.
+  - \`findReferences\` to find callers.
+- Calls made through an interface (\`IHttpFactory.GetRequestEntryIDLog().LogRequestEntryID(...)\`)
+  are references to the **interface member**. Ask \`findReferences\` on the interface member; on the
+  implementing codeunit's procedure it returns no callers.
+- The server indexes the workspace when it starts. "Server is starting" or "has not finished
+  indexing" means wait and retry, not "no results".
+- Symbols from dependencies (Microsoft base app, other Continia apps) may not resolve, and
+  diagnostics about them (AL0185, AL0118) are expected. Use Grep for those, and for setup-files JSON.
+- Read a file only once LSP has told you which lines matter.
+`;
 
 function fullPlanInstructions(paths: PhasePaths): string {
   return `Invoke the **bank-integration-planner** skill and run it to completion. Give it the

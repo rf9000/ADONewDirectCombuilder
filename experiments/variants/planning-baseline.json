@@ -5,6 +5,7 @@
   "maxUsd": 200,
   "variants": [
     { "name": "opus-high", "model": "claude-opus-5-5", "effort": "high" },
+    { "name": "opus-lsp", "model": "claude-opus-5-5", "effort": "high", "lsp": true },
     { "name": "opus-med", "model": "claude-opus-5-5", "effort": "medium" },
     { "name": "opus-sonnet-subs", "model": "claude-opus-5-5", "effort": "high", "subagentModel": "claude-sonnet-5-5" },
     { "name": "opus-haiku-subs", "model": "claude-opus-5-5", "effort": "high", "subagentModel": "claude-haiku-4-5-20251001" },

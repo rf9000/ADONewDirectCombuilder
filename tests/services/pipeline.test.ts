@@ -1344,3 +1344,42 @@ describe('follow-up rounds', () => {
     expect(prompt).not.toContain('revision mode');
   });
 });
+
+describe('planning with the AL language server', () => {
+  async function planPrompt(cfgOverrides: Partial<AppConfig>, lsp?: boolean): Promise<string> {
+    const deps = makeDeps({ questions: CLEAN_PLAN });
+    const cfg = config(cfgOverrides);
+    const worktrees = await prepareWorkspaces(cfg, mockWorkItem(), 'b', deps);
+    const ctx: PhaseContext = {
+      config: cfg,
+      item: mockWorkItem(),
+      job: store.ensure(TEST_ITEM_ID),
+      store,
+      deps,
+      branch: 'b',
+      worktrees,
+      paths: pathsFor(worktrees.banking),
+      comments: [],
+      workItemContext: 'context',
+      ...(lsp === undefined ? {} : { agentOverrides: { lsp } }),
+    };
+    await runPlanningPhase(ctx);
+    return String((deps.runAgent as ReturnType<typeof mock>).mock.calls[0]![1]);
+  }
+
+  test('tells the planner, and every subagent it dispatches, how to use LSP', async () => {
+    const prompt = await planPrompt({ alLspPluginDir: '/opt/al-lsp' });
+    expect(prompt).toContain('## AL language server');
+    expect(prompt).toContain('Pass this section on to every subagent');
+    expect(prompt).toContain('goToImplementation');
+    expect(prompt).toContain('interface member');
+  });
+
+  test('says nothing about LSP when it is not configured', async () => {
+    expect(await planPrompt({})).not.toContain('AL language server');
+  });
+
+  test('says nothing about LSP when the run opts out', async () => {
+    expect(await planPrompt({ alLspPluginDir: '/opt/al-lsp' }, false)).not.toContain('AL language server');
+  });
+});
