@@ -22,6 +22,7 @@ import {
   resolveSeedRepo,
   revParse,
   run as runCommand,
+  ensureFetchRefspec,
 } from '../../src/services/workspace.ts';
 
 let root: string;
@@ -415,5 +416,30 @@ describe('run error messages', () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).not.toContain('U0VDUkVULVBBVA==');
     expect((err as Error).message).toContain('http.extraHeader=Authorization: ***');
+  });
+});
+
+describe('ensureFetchRefspec', () => {
+  // Rewriting a value that is already there failed twice on Windows with an
+  // empty `git config … exited 66`, each time right after a long agent run.
+  test('sets the refspec when missing and leaves the config untouched when present', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'refspec-'));
+    try {
+      const { spawnSync } = await import('child_process');
+      spawnSync('git', ['init', '-q', '--bare', repo]);
+      const configFile = join(repo, 'config');
+
+      await ensureFetchRefspec(mockConfig(), repo);
+      const once = readFileSync(configFile, 'utf-8');
+      expect(once).toContain('fetch = +refs/heads/*:refs/remotes/origin/*');
+
+      const { mtimeMs } = lstatSync(configFile);
+      await new Promise((r) => setTimeout(r, 20));
+      await ensureFetchRefspec(mockConfig(), repo);
+      expect(lstatSync(configFile).mtimeMs).toBe(mtimeMs);
+      expect(readFileSync(configFile, 'utf-8')).toBe(once);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

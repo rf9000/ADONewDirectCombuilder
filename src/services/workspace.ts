@@ -169,19 +169,32 @@ export async function ensureRepoCache(
     );
   }
 
-  // A bare clone ships no fetch refspec — give it one so updates land in
-  // remote-tracking refs instead of overwriting local branches.
-  await git(
-    config,
-    ['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
-    { cwd: target },
-  );
+  await ensureFetchRefspec(config, target);
   await git(config, ['fetch', '--prune', 'origin'], {
     cwd: target,
     authenticated: true,
   });
 
   return target;
+}
+
+const FETCH_REFSPEC = '+refs/heads/*:refs/remotes/origin/*';
+
+/**
+ * A bare clone ships no fetch refspec — give it one so updates land in
+ * remote-tracking refs instead of overwriting local branches.
+ *
+ * Written only when missing. Rewriting the value already there failed twice
+ * locally on Windows with an empty `git config … exited 66`, each time right
+ * after a long agent run; a read leaves the config file alone.
+ */
+export async function ensureFetchRefspec(config: AppConfig, mirror: string): Promise<void> {
+  const current = await git(config, ['config', '--get-all', 'remote.origin.fetch'], {
+    cwd: mirror,
+    allowFailure: true,
+  });
+  if (current.stdout.split(/\r?\n/).some((line) => line.trim() === FETCH_REFSPEC)) return;
+  await git(config, ['config', 'remote.origin.fetch', FETCH_REFSPEC], { cwd: mirror });
 }
 
 /**
