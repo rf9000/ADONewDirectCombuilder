@@ -37,6 +37,8 @@ export interface FrozenInput {
   shas: { banking: string; setupFiles: string };
   docs: FrozenDoc[];
   previousQuestions?: PlanQuestions;
+  /** An earlier variant's plan folder that every variant starts from (revision mode). */
+  fromPlan?: string;
 }
 
 export interface FreezeDeps {
@@ -99,7 +101,7 @@ export async function freezeInput(
   config: AppConfig,
   itemId: number,
   runDir: string,
-  opts: { answersFile?: string; questionsFile?: string },
+  opts: { answersFile?: string; questionsFile?: string; fromPlan?: string },
   deps: FreezeDeps,
 ): Promise<FrozenInput> {
   const item = await deps.getWorkItem(config, itemId);
@@ -136,9 +138,12 @@ export async function freezeInput(
       setupFiles: await deps.resolveRemoteSha(config, config.repos.setupFiles),
     },
     docs,
-    previousQuestions: opts.questionsFile
-      ? (JSON.parse(readFileSync(opts.questionsFile, 'utf-8')) as PlanQuestions)
-      : undefined,
+    previousQuestions: (() => {
+      // An earlier plan carries the questions its answers respond to.
+      const file = opts.questionsFile ?? (opts.fromPlan ? join(opts.fromPlan, 'questions.json') : undefined);
+      return file ? (JSON.parse(readFileSync(file, 'utf-8')) as PlanQuestions) : undefined;
+    })(),
+    fromPlan: opts.fromPlan,
   };
 
   writeFileSync(join(runDir, 'input.json'), JSON.stringify(frozen, null, 2), 'utf-8');

@@ -38,6 +38,13 @@ bun run experiment plan 83634 --answers answers.md \
   --questions experiments/runs/83634/<runId>/opus-high/plan/questions.json
 ```
 
+To measure a follow-up round, start every variant from an earlier plan with `--from-plan`. Each
+variant then gets that plan, its questions and your answers, and takes the revision path:
+
+```bash
+bun run experiment plan 83634 --from-plan 20260930-190025/opus-high --answers answers.md
+```
+
 Nothing is written to Azure DevOps and nothing is pushed. Agent runs load no MCP servers.
 
 ## Read the report

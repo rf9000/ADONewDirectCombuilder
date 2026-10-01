@@ -58,6 +58,8 @@ export interface ExperimentOptions {
    * already succeeded and judge verdicts that are still valid.
    */
   resumeRunId?: string;
+  /** Start every variant from this earlier plan folder, as a follow-up round. */
+  fromPlan?: string;
 }
 
 export interface ExperimentDeps {
@@ -227,6 +229,11 @@ async function runVariant(
 
     const store = new StateStore(join(variantDir, 'state'));
     store.ensure(frozen.workItemId);
+    if (frozen.fromPlan) {
+      // The earlier round's plan sits where the pipeline expects the previous
+      // round's output, so runPlanningPhase takes the revision path.
+      copyIfExists(frozen.fromPlan, dirname(paths.questionsPath));
+    }
     if (frozen.previousQuestions) {
       // runPlanningPhase reads the previous round's questions from the worktree.
       store.update(frozen.workItemId, { clarifyRounds: 1 });
@@ -265,10 +272,12 @@ async function runVariant(
 
   let taskCount: number | undefined;
   let designDoc = false;
+  let revisionMode: string | undefined;
   if (banking) {
     const paths = pathsFor(banking);
     copyIfExists(join(banking, '.agent', 'plan'), join(variantDir, 'plan'));
     taskCount = countTasks(readJson(paths.taskListPath));
+    revisionMode = (readJson(paths.artifactsPath) as { revisionMode?: string } | undefined)?.revisionMode;
     designDoc = existsSync(paths.designDocPath);
   }
 
@@ -291,6 +300,7 @@ async function runVariant(
     designDoc,
     rateLimit: last?.rateLimit,
     worktreeRoot,
+    revisionMode,
   };
   writeFileSync(join(variantDir, 'usage.json'), JSON.stringify(usage, null, 2), 'utf-8');
   log(`  Variant ${variant.name}: ${usage.status}, $${usage.costUsd.toFixed(2)}`);
@@ -393,7 +403,7 @@ export async function runExperiment(
       config,
       opts.workItemId,
       runDir,
-      { answersFile: opts.answersFile, questionsFile: opts.questionsFile },
+      { answersFile: opts.answersFile, questionsFile: opts.questionsFile, fromPlan: opts.fromPlan },
       deps.freeze,
     );
   }

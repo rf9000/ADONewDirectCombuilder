@@ -46,6 +46,20 @@ describe('parseExperimentArgs', () => {
   });
 });
 
+describe('parseExperimentArgs --from-plan', () => {
+  test('resolves a run and variant to that plan folder', () => {
+    expect(parseExperimentArgs(['plan', '83634', '--from-plan', '20260930-190025/opus-high']).fromPlan).toBe(
+      'experiments/runs/83634/20260930-190025/opus-high/plan',
+    );
+  });
+
+  test('rejects a value without a variant', () => {
+    expect(() => parseExperimentArgs(['plan', '83634', '--from-plan', '20260930-190025'])).toThrow(
+      '--from-plan takes <runId>/<variant>',
+    );
+  });
+});
+
 describe('parseExperimentArgs --resume', () => {
   test('reads the run id to resume', () => {
     expect(parseExperimentArgs(['plan', '83634', '--resume', '20260930-190025']).resumeRunId).toBe(

@@ -57,6 +57,7 @@ interface Fake {
   noPlanDirFor?: string;
   worktreeFailsOnFirstCall?: boolean;
   judgeWritesNothing?: boolean;
+  revisionMode?: string;
 }
 
 function deps(fake: Fake = {}): ExperimentDeps & {
@@ -119,7 +120,7 @@ function deps(fake: Fake = {}): ExperimentDeps & {
       writeFileSync(join(planDir, 'questions.json'), JSON.stringify({ blocking: [], ambiguities: [{ question: 'q' }] }));
       writeFileSync(join(planDir, 'design-doc.md'), '# plan');
       writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ tasks: [1, 2, 3] }));
-      writeFileSync(join(planDir, 'artifacts.json'), '{}');
+      writeFileSync(join(planDir, 'artifacts.json'), JSON.stringify(fake.revisionMode ? { revisionMode: fake.revisionMode } : {}));
       // Planner scratch that only some runs leave behind.
       mkdirSync(join(planDir, 'fragments'), { recursive: true });
       writeFileSync(join(planDir, 'fragments', 'auth.md'), 'scratch');
@@ -388,6 +389,39 @@ describe('runExperiment', () => {
     await expect(runExperiment(config(), opts({ resumeRunId: 'nope' }), deps())).rejects.toThrow(
       'no input.json',
     );
+  });
+
+  test('--from-plan starts each variant from an earlier plan in revision mode', async () => {
+    const earlier = join(root, 'earlier-plan');
+    mkdirSync(earlier, { recursive: true });
+    writeFileSync(join(earlier, 'design-doc.md'), '# Earlier plan');
+    writeFileSync(join(earlier, 'tasklist.json'), JSON.stringify({ tasks: [1] }));
+    writeFileSync(join(earlier, 'questions.json'), JSON.stringify({ blocking: [{ question: 'Sandbox?' }], ambiguities: [] }));
+    writeFileSync(join(root, 'answers.md'), 'Use the sandbox.');
+
+    const d = deps();
+    const r = await runExperiment(
+      config(),
+      opts({ only: ['opus'], answersFile: join(root, 'answers.md'), fromPlan: earlier }),
+      d,
+    );
+
+    const prompt = String(d.runAgent.mock.calls[0]![1]);
+    expect(prompt).toContain('revision mode');
+    expect(prompt).toContain('Sandbox?');
+    expect(prompt).toContain('Use the sandbox.');
+    const input = JSON.parse(readFileSync(join(root, 'experiments', 'runs', '42', r.runId, 'input.json'), 'utf-8'));
+    expect(input.fromPlan).toBe(earlier);
+  });
+
+  test('records the revision mode the planner reported', async () => {
+    const earlier = join(root, 'earlier-plan');
+    mkdirSync(earlier, { recursive: true });
+    writeFileSync(join(earlier, 'design-doc.md'), '# Earlier plan');
+    writeFileSync(join(earlier, 'questions.json'), JSON.stringify({ blocking: [], ambiguities: [] }));
+    const d = deps({ revisionMode: 'incremental' });
+    const r = await runExperiment(config(), opts({ only: ['opus'], fromPlan: earlier }), d);
+    expect(r.variants[0]!.revisionMode).toBe('incremental');
   });
 
   test('answers and previous questions make it a follow-up round', async () => {

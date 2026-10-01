@@ -35,6 +35,8 @@ export interface VariantUsage {
   rateLimit?: RateLimitInfo;
   /** Where this variant's worktrees live; the name is opaque so the judge cannot tell. */
   worktreeRoot?: string;
+  /** From artifacts.json on follow-up rounds: whether the plan was patched or redone. */
+  revisionMode?: string;
 }
 
 export interface ExperimentResults {

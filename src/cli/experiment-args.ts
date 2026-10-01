@@ -4,7 +4,8 @@ export const DEFAULT_VARIANTS_FILE = 'experiments/variants/planning-baseline.jso
 
 export const EXPERIMENT_USAGE =
   'Usage: bun run experiment plan <work-item-id> [--variants <file>] [--only a,b] ' +
-  '[--answers <file>] [--questions <file>] [--auth subscription|api-key] [--resume <runId>]';
+  '[--answers <file>] [--questions <file>] [--from-plan <runId>/<variant>] ' +
+  '[--auth subscription|api-key] [--resume <runId>]';
 
 export interface ExperimentArgs {
   workItemId: number;
@@ -14,9 +15,11 @@ export interface ExperimentArgs {
   questionsFile?: string;
   auth: AuthMode;
   resumeRunId?: string;
+  /** Plan folder of an earlier variant to revise, e.g. experiments/runs/<id>/<runId>/<variant>/plan. */
+  fromPlan?: string;
 }
 
-const FLAGS = new Set(['--variants', '--only', '--answers', '--questions', '--auth', '--resume']);
+const FLAGS = new Set(['--variants', '--only', '--answers', '--questions', '--auth', '--resume', '--from-plan']);
 
 export function parseExperimentArgs(argv: string[]): ExperimentArgs {
   const [phase, id, ...rest] = argv;
@@ -49,5 +52,10 @@ export function parseExperimentArgs(argv: string[]): ExperimentArgs {
   if (questions) args.questionsFile = questions;
   const resume = values.get('--resume');
   if (resume) args.resumeRunId = resume;
+  const fromPlan = values.get('--from-plan');
+  if (fromPlan) {
+    if (!/^[^/\\]+\/[^/\\]+$/.test(fromPlan)) throw new Error('--from-plan takes <runId>/<variant>');
+    args.fromPlan = `experiments/runs/${id}/${fromPlan}/plan`;
+  }
   return args;
 }

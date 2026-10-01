@@ -34,6 +34,7 @@ Commands:
                        --variants <file> --only a,b --answers <file>
                        --questions <file> --auth subscription|api-key
                        --resume <runId> (reuse a run; skip variants that succeeded)
+                       --from-plan <runId>/<variant> (revise that plan, as a follow-up round)
   help                 Show this help message
 
 Options:
