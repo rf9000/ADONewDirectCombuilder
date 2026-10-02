@@ -1407,7 +1407,10 @@ describe('planning that stops before its output phase', () => {
           writeFileSync(join(planDir, 'questions.json'), JSON.stringify(CLEAN_PLAN), 'utf-8');
           writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
         }
-        return Promise.resolve({ text: 'Writing the test plan now.', success: true, costUsd: 2, numTurns: 5, sessionId: 'sess-1' });
+        // Like the SDK: a resumed session reports its cumulative cost.
+        const cumulative = calls * 2;
+        const baseline = (options as { costBaselineUsd?: number }).costBaselineUsd ?? 0;
+        return Promise.resolve({ text: 'Writing the test plan now.', success: true, costUsd: cumulative - baseline, numTurns: 5, sessionId: 'sess-1' });
       },
     );
     return deps;
@@ -1436,6 +1439,7 @@ describe('planning that stops before its output phase', () => {
     const calls = (deps.runAgent as ReturnType<typeof mock>).mock.calls;
     expect(calls).toHaveLength(2);
     expect(calls[1]![2].resumeSessionId).toBe('sess-1');
+    expect(calls[1]![2].costBaselineUsd).toBe(2);
     expect(String(calls[1]![1])).toContain('You stopped before finishing');
     // Both runs count against the job's budget.
     expect(store.get(TEST_ITEM_ID)!.spentUsd).toBe(4);

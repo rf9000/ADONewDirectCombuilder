@@ -200,10 +200,19 @@ async function runVariant(
   };
   const branch = `experiment/${runId}-${slot}`;
 
+  // A planning phase can make several agent runs (a stopped session gets
+  // nudged), so cost and turns add up; status comes from the last run.
   let last: AgentRunResult | undefined;
+  let costUsd = 0;
+  let numTurns = 0;
   const pipelineDeps: PipelineDeps = {
     ...experimentDeps(deps.pipeline),
-    runAgent: async (...args) => (last = await deps.pipeline.runAgent(...args)),
+    runAgent: async (...args) => {
+      last = await deps.pipeline.runAgent(...args);
+      costUsd += last.costUsd;
+      numTurns += last.numTurns;
+      return last;
+    },
   };
 
   let error: string | undefined;
@@ -294,9 +303,9 @@ async function runVariant(
     subagentModel: variant.subagentModel,
     status: gated ? 'gated' : classified,
     error,
-    costUsd: last?.costUsd ?? 0,
+    costUsd,
     modelUsage: last?.modelUsage ?? {},
-    numTurns: last?.numTurns ?? 0,
+    numTurns,
     // Wall clock: the SDK's duration_ms covers only the last result's stretch
     // when background subagents woke the session up again.
     durationMs: deps.now().getTime() - startedAt,

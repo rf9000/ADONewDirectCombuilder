@@ -42,6 +42,12 @@ export interface AgentRunOptions extends AgentOverrides {
   /** Continue this earlier session instead of starting a new one. */
   resumeSessionId?: string;
   /**
+   * What the resumed session had already cost. A resumed session reports
+   * total_cost_usd for the whole session, so this is subtracted to report
+   * only the new run's cost. (Its maxBudgetUsd cap is not cumulative.)
+   */
+  costBaselineUsd?: number;
+  /**
    * Spend cap in USD for this run, passed to the SDK as `maxBudgetUsd`.
    * Defaults to `config.agentMaxBudgetUsd`; the pipeline lowers it to what is
    * left of the job's budget.
@@ -210,7 +216,8 @@ export async function runAgent(
   let sessionId: string | undefined;
   let success = false;
   let subtype: string | undefined;
-  let costUsd = 0;
+  const costBaselineUsd = options.costBaselineUsd ?? 0;
+  let costUsd = costBaselineUsd;
   let numTurns = 0;
   let modelUsage: Record<string, ModelUsageSummary> | undefined;
   let durationMs: number | undefined;
@@ -360,7 +367,7 @@ export async function runAgent(
     sessionId,
     success,
     subtype,
-    costUsd,
+    costUsd: costUsd - costBaselineUsd,
     numTurns,
     modelUsage,
     durationMs,

@@ -57,6 +57,8 @@ interface Fake {
   noPlanDirFor?: string;
   /** Model whose planner stops at the Phase 1 gate: blocking questions, no plan. */
   gateFor?: string;
+  /** Model whose planner stops once before writing anything, then finishes when resumed. */
+  stopsOnceFor?: string;
   worktreeFailsOnFirstCall?: boolean;
   judgeWritesNothing?: boolean;
   revisionMode?: string;
@@ -114,6 +116,14 @@ function deps(fake: Fake = {}): ExperimentDeps & {
         subtype: 'error_during_execution',
         rateLimit: { status: 'rejected' as const, type: 'five_hour', resetsAt: 1700000000 },
       });
+    }
+
+    if (fake.stopsOnceFor === model && !options.resumeSessionId) {
+      return Promise.resolve({ ...base, sessionId: 'sess-x' });
+    }
+    if (fake.stopsOnceFor === model && options.resumeSessionId) {
+      // The SDK reports a resumed session cumulatively; the runner subtracts the baseline.
+      Object.assign(base, { costUsd: cost * 1.2 - (options.costBaselineUsd ?? 0) });
     }
 
     if (fake.gateFor === model) {
@@ -522,6 +532,12 @@ describe('runExperiment', () => {
     const r = await runExperiment(config(), opts({ resumeRunId: r1.runId }), d);
     expect(r.variants.find((v) => v.variant === 'sonnet')!.status).toBe('ok');
     expect(r.judges.map((j) => j.variant)).toEqual(['sonnet']);
+  });
+
+  test('counts every run of a nudged variant, not just the last', async () => {
+    const r = await runExperiment(config(), opts({ only: ['opus'] }), deps({ stopsOnceFor: 'claude-opus-5-5' }));
+    // First run $50, nudge reports $60 cumulative, so it added $10.
+    expect(r.variants[0]).toMatchObject({ status: 'ok', costUsd: 60 });
   });
 
   test('answers and previous questions make it a follow-up round', async () => {

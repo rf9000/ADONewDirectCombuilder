@@ -553,3 +553,24 @@ describe('runAgent transcript', () => {
     expect(readFileSync(logFile, 'utf-8')).toContain('===== run ended');
   });
 });
+
+
+describe('runAgent cost of a resumed session', () => {
+  // A resumed session reports total_cost_usd for the whole session, earlier
+  // runs included (seen 2026-10-01: a $6.36 rescue reported $37.51).
+  test('reports only the cost added since costBaselineUsd', async () => {
+    const res = await runAgent(
+      mockConfig(),
+      'continue',
+      { cwd: dir, logFile: join(dir, 'run.log'), resumeSessionId: 's', costBaselineUsd: 31.15 },
+      ((_params: unknown) =>
+        (async function* () {
+          yield {
+            type: 'result', subtype: 'success', result: 'x', session_id: 's', total_cost_usd: 37.51,
+            num_turns: 12, duration_ms: 1, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {},
+          };
+        })()) as never,
+    );
+    expect(res.costUsd).toBeCloseTo(6.36, 5);
+  });
+});

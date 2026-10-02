@@ -293,6 +293,9 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
   // session's context is cached, so resuming it to finish costs a fraction of
   // planning again; the artifact checks below still reject a run that never
   // finishes.
+  // The SDK reports a resumed session's cost cumulatively; track the session's
+  // total so each nudge reports, and is charged, only what it added.
+  let sessionCostUsd = result.costUsd;
   for (
     let nudge = 1;
     nudge <= MAX_PLANNING_NUDGES &&
@@ -306,8 +309,9 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
       'planning',
       prompts.buildPlanningNudge(paths),
       logPath(config, item.id, `plan-${job.clarifyRounds + 1}-nudge-${nudge}`),
-      { resumeSessionId: result.sessionId },
+      { resumeSessionId: result.sessionId, costBaselineUsd: sessionCostUsd },
     );
+    sessionCostUsd += result.costUsd;
   }
 
   const artifacts = deps.readJsonArtifact<PlanArtifacts>(paths.artifactsPath);
