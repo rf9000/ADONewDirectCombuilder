@@ -311,7 +311,7 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
     result = await runPhaseAgent(
       ctx,
       'planning',
-      prompts.buildPlanningNudge(paths),
+      prompts.buildPlanningNudge(paths, mode),
       logPath(config, item.id, `plan-${job.clarifyRounds + 1}-nudge-${nudge}`),
       { resumeSessionId: result.sessionId, costBaselineUsd: sessionCostUsd },
     );
@@ -865,7 +865,12 @@ export function failedPhaseLog(
   itemId: number,
   deps: PipelineDeps,
 ): string {
-  const candidates = ['verify', 'implement', 'plan-3', 'plan-2', 'plan-1'];
+  // Within a planning round the last nudge is the newest log.
+  const planRound = (n: number) =>
+    Array.from({ length: MAX_PLANNING_NUDGES }, (_, i) => `plan-${n}-nudge-${MAX_PLANNING_NUDGES - i}`).concat(
+      `plan-${n}`,
+    );
+  const candidates = ['verify', 'implement', ...planRound(3), ...planRound(2), ...planRound(1)];
   for (const phase of candidates) {
     const path = logPath(config, itemId, phase);
     if (deps.tailLog(path, 1) !== '(no log)') return path;

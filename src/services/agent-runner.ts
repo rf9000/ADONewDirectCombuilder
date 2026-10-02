@@ -367,7 +367,9 @@ export async function runAgent(
     sessionId,
     success,
     subtype,
-    costUsd: costUsd - costBaselineUsd,
+    // A total below the baseline means the session did not continue (the
+    // resume started fresh), so the whole total is this run's cost.
+    costUsd: costUsd >= costBaselineUsd ? costUsd - costBaselineUsd : costUsd,
     numTurns,
     modelUsage,
     durationMs,

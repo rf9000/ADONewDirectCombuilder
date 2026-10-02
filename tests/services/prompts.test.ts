@@ -5,6 +5,8 @@ import {
   buildWorkItemContext,
   buildQuestionsComment,
   buildImplementPrompt,
+  buildPlanningNudge,
+  buildPlanningPrompt,
   escapeHtml,
   BOT_COMMENT_MARKER,
   isBotComment,
@@ -248,5 +250,30 @@ describe('buildWorkItemContext orchestration note', () => {
   test('omits the note when no config is supplied', () => {
     const context = buildWorkItemContext(mockWorkItem(), []);
     expect(context).not.toContain('mean nothing inside the product repositories');
+  });
+});
+
+
+describe('buildPlanningNudge', () => {
+  test('a full-plan nudge finishes the remaining phases', () => {
+    const nudge = buildPlanningNudge(TEST_PATHS, 'full');
+    expect(nudge).toContain('finish the remaining bank-integration-planner phases');
+  });
+
+  test('a revision nudge finishes the revision, not Phases 0-9', () => {
+    const nudge = buildPlanningNudge(TEST_PATHS, 'revision');
+    expect(nudge).toContain('Follow-up round (revision mode)');
+    expect(nudge).not.toContain('remaining bank-integration-planner phases');
+  });
+
+  test('does not ask to wait for subagents that ended with the session', () => {
+    expect(buildPlanningNudge(TEST_PATHS, 'full')).not.toContain('Wait for any subagent');
+  });
+});
+
+describe('revision mode prompt', () => {
+  test('moves the old plan aside before falling back to a full re-plan', () => {
+    const prompt = buildPlanningPrompt(mockConfig(), 'ctx', TEST_PATHS, '/b', '/s', { blocking: [], ambiguities: [] }, 'revision');
+    expect(prompt).toContain('plan/superseded/');
   });
 });

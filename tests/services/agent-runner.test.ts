@@ -574,3 +574,24 @@ describe('runAgent cost of a resumed session', () => {
     expect(res.costUsd).toBeCloseTo(6.36, 5);
   });
 });
+
+
+describe('runAgent cost floor', () => {
+  // If a resume ever starts a fresh session, its total is below the baseline;
+  // a negative cost would lower the job's recorded spend.
+  test('never reports a negative cost', async () => {
+    const res = await runAgent(
+      mockConfig(),
+      'continue',
+      { cwd: dir, logFile: join(dir, 'run.log'), resumeSessionId: 's', costBaselineUsd: 40 },
+      ((_params: unknown) =>
+        (async function* () {
+          yield {
+            type: 'result', subtype: 'success', result: 'x', session_id: 'new', total_cost_usd: 1.5,
+            num_turns: 1, duration_ms: 1, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {},
+          };
+        })()) as never,
+    );
+    expect(res.costUsd).toBe(1.5);
+  });
+});

@@ -45,6 +45,16 @@ docker-compose.
   and adds the run's cost to the job's `spentUsd`. `total_cost_usd` is a running total per
   query (one query can yield several results when background subagents wake it), so never sum
   the logged values. A job over its cap fails before the next run; `reset-budget <id>` clears it
+- **Planning must finish** — a planning run must write a fresh `questions.json` and
+  `artifacts.json` (both are deleted before the run), and an unblocked plan must have a task list.
+  A session that ends early is resumed (`resume`) up to twice with a "finish" prompt; a resumed
+  session reports cumulative cost, so `costBaselineUsd` charges only what it added. A run that
+  still has not finished fails at `planning`, and a retry starts a full plan in a wiped worktree:
+  on a follow-up round that discards the earlier plan (~$30), which is accepted — the alternative
+  was implement building from no plan
+- **Revision mode** — a follow-up round whose worktree holds a design doc revises that plan (the
+  skill's "Follow-up round (revision mode)") instead of re-running Phases 0–9; `artifacts.json`
+  records `revisionMode`
 - **Serialized jobs** — one at a time; BC cannot run concurrent test jobs on one environment
 - **Tag-swap handshake** — the bot swaps the trigger tag for a waiting tag when it needs answers;
   re-adding the trigger tag resumes the job

@@ -235,13 +235,17 @@ Subagents share this session's server, so once it answers you, it answers them.
 `;
 
 /** Resumes a planning session that ended before writing its artifacts. */
-export function buildPlanningNudge(paths: PhasePaths): string {
+export function buildPlanningNudge(paths: PhasePaths, mode: 'full' | 'revision' = 'full'): string {
+  const work =
+    mode === 'revision'
+      ? 'finish the revision as the "Follow-up round (revision mode)" section describes'
+      : 'finish the remaining bank-integration-planner phases';
   return `You stopped before finishing: the planning job is not complete, because
-\`${paths.questionsPath}\` does not exist yet.
+\`${paths.questionsPath}\` or \`${paths.artifactsPath}\` does not exist yet.
 
-Continue from where you stopped. Do not start over. Wait for any subagent you dispatched,
-finish the remaining bank-integration-planner phases, and write every required artifact
-exactly as the original instructions specify:
+Continue from where you stopped. Do not start over. A subagent that had not reported back
+when you stopped is gone: redo its step yourself or dispatch it again. Then ${work},
+and write every required artifact exactly as the original instructions specify:
 
 - design doc → \`${paths.designDocPath}\`
 - task list → \`${paths.taskListPath}\`
@@ -279,7 +283,9 @@ The existing plan, which you revise in place:
 - planner working files (fragments, verdicts), if any → \`${paths.agentDir}/plan/\`
 
 If an answer changes the plan's foundation (a different auth flow, reference bank or set of
-file types), say so and run the skill in full instead. Record which you did in
+file types), say so and run the skill in full instead. Before that full run, move the
+existing design doc, task list and planner working files into \`${paths.agentDir}/plan/superseded/\`,
+so a later round never revises a plan you rejected. Record which you did in
 \`revisionMode\` below.`;
 }
 

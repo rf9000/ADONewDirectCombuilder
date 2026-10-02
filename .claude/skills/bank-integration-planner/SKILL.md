@@ -192,8 +192,9 @@ the first round. Revision keeps the parts the answers do not touch.
    beside them.
 2. **Decide whether revision is enough.** An answer that changes the plan's foundation — a
    different auth flow, a different reference bank, a different set of file types in or out —
-   invalidates too much to patch. Then run Phases 0–9 in full and record
-   `revisionMode: "full"` with the reason.
+   invalidates too much to patch. Then move the existing design doc, task list and planner
+   working files into `plan/superseded/` (so no later round revises the plan you rejected), run
+   Phases 0–9 in full, and record `revisionMode: "full"` with the reason.
 3. **Map answers to scope.** For each answer, list the domains (auth, export, import, assisted
    setup), design-doc sections, test-plan entries, setup-data entries and tasks it affects. An
    answer that only confirms a default the plan already took changes nothing but the questions.

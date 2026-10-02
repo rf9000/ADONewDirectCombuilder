@@ -1198,6 +1198,16 @@ describe('failedPhaseLog', () => {
     expect(failedPhaseLog(cfg, 42, deps)).toContain('implement');
   });
 
+  test('quotes the last nudge of a planning round, not its first run', () => {
+    const cfg = config();
+    const deps = makeDeps();
+    const present = new Set(['plan-1.log', 'plan-1-nudge-1.log', 'plan-1-nudge-2.log']);
+    (deps as { tailLog: unknown }).tailLog = (path: string) =>
+      present.has(path.split(/[\\/]/).pop()!) ? 'content' : '(no log)';
+
+    expect(failedPhaseLog(cfg, 42, deps)).toEndWith('plan-1-nudge-2.log');
+  });
+
   test('falls back to the first planning log when nothing ran', () => {
     const cfg = config();
     const deps = makeDeps();
