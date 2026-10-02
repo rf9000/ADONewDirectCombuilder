@@ -511,6 +511,7 @@ describe('runJob — failures', () => {
           );
           // A complete plan; without it planning itself now fails, before verify.
           writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
+          writeFileSync(join(planDir, 'artifacts.json'), '{}', 'utf-8');
         }
         return Promise.resolve({
           text: 'ok',
@@ -1406,6 +1407,7 @@ describe('planning that stops before its output phase', () => {
           mkdirSync(planDir, { recursive: true });
           writeFileSync(join(planDir, 'questions.json'), JSON.stringify(CLEAN_PLAN), 'utf-8');
           writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
+          writeFileSync(join(planDir, 'artifacts.json'), '{}', 'utf-8');
         }
         // Like the SDK: a resumed session reports its cumulative cost.
         const cumulative = calls * 2;
@@ -1455,5 +1457,37 @@ describe('planning that stops before its output phase', () => {
     const deps = stoppingDeps(0);
     await runPlanningPhase(await ctxFor(deps));
     expect((deps.runAgent as ReturnType<typeof mock>).mock.calls).toHaveLength(1);
+  });
+});
+
+describe('planning artifacts on follow-up rounds', () => {
+  test('fails when the planner wrote no artifacts.json', async () => {
+    const deps = makeDeps({ questions: CLEAN_PLAN, omitPlanFiles: ['artifacts.json'] });
+    const cfg = config();
+    const worktrees = await prepareWorkspaces(cfg, mockWorkItem(), 'b', deps);
+    const ctx: PhaseContext = {
+      config: cfg, item: mockWorkItem(), job: store.ensure(TEST_ITEM_ID), store, deps, branch: 'b',
+      worktrees, paths: pathsFor(worktrees.banking), comments: [], workItemContext: 'context',
+    };
+    await expect(runPlanningPhase(ctx)).rejects.toThrow('wrote no artifacts.json');
+  });
+
+  test('a revision round cannot pass on the previous round\'s task list and artifacts', async () => {
+    // The planner answers the questions but never patches the plan.
+    const deps = makeDeps({ questions: CLEAN_PLAN, omitPlanFiles: ['artifacts.json', 'tasklist.json', 'design-doc.md'] });
+    const cfg = config();
+    const worktrees = await prepareWorkspaces(cfg, mockWorkItem(), 'b', deps);
+    const paths = pathsFor(worktrees.banking);
+    mkdirSync(join(worktrees.banking, '.agent', 'plan'), { recursive: true });
+    writeFileSync(paths.designDocPath, '# Round 1 plan', 'utf-8');
+    writeFileSync(paths.taskListPath, JSON.stringify({ waves: [] }), 'utf-8');
+    writeFileSync(paths.artifactsPath, '{}', 'utf-8');
+    writeFileSync(paths.questionsPath, JSON.stringify(OPEN_PLAN), 'utf-8');
+    store.update(TEST_ITEM_ID, { clarifyRounds: 1 });
+    const ctx: PhaseContext = {
+      config: cfg, item: mockWorkItem(), job: store.ensure(TEST_ITEM_ID), store, deps, branch: 'b',
+      worktrees, paths, comments: [], workItemContext: 'context',
+    };
+    await expect(runPlanningPhase(ctx)).rejects.toThrow('wrote no artifacts.json');
   });
 });

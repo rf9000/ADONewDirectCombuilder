@@ -130,6 +130,7 @@ function deps(fake: Fake = {}): ExperimentDeps & {
       const planDir = join(options.cwd, '.agent', 'plan');
       mkdirSync(planDir, { recursive: true });
       writeFileSync(join(planDir, 'questions.json'), JSON.stringify({ blocking: [{ question: 'Where is the signing URL?' }], ambiguities: [] }));
+      writeFileSync(join(planDir, 'artifacts.json'), '{}');
       return Promise.resolve(base);
     }
 

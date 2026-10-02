@@ -276,10 +276,13 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
     !!config.alLspPluginDir && ctx.agentOverrides?.lsp !== false,
   );
 
-  // The previous round's questions are in the prompt now. Removing the file
-  // means a run that stops before writing its own cannot pass the old one off
-  // as its answer.
+  // The previous round's questions are in the prompt now. Removing them and
+  // the previous artifacts.json means a run that stops before writing its own
+  // cannot pass the old ones off as its answer. The task list and design doc
+  // stay: a revision round patches them, and leaving one unchanged is valid,
+  // so artifacts.json (rewritten on every run) is what proves the run finished.
   rmSync(paths.questionsPath, { force: true });
+  rmSync(paths.artifactsPath, { force: true });
 
   let result = await runPhaseAgent(
     ctx,
@@ -300,7 +303,8 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
     let nudge = 1;
     nudge <= MAX_PLANNING_NUDGES &&
     result.sessionId !== undefined &&
-    deps.readJsonArtifact(paths.questionsPath) === undefined;
+    (deps.readJsonArtifact(paths.questionsPath) === undefined ||
+      deps.readJsonArtifact(paths.artifactsPath) === undefined);
     nudge++
   ) {
     log(`  Item #${item.id}: planning stopped before writing its artifacts — resuming it (nudge ${nudge})`);
@@ -324,6 +328,12 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
   if (!written) {
     throw new Error(
       'Planning finished but wrote no questions.json — the planner stopped before ' +
+        'its output phase, so the plan is incomplete.',
+    );
+  }
+  if (!artifacts) {
+    throw new Error(
+      'Planning finished but wrote no artifacts.json — the planner stopped before ' +
         'its output phase, so the plan is incomplete.',
     );
   }
