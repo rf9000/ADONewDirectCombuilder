@@ -5,6 +5,22 @@ as human-reviewable **pseudo-tests** (Scenario / Given / When / Then). Write no 
 are the artifact a human reads to validate the suite *before* any code is written, and the source
 `spec-to-tasklist` decomposes into one task per test.
 
+## Finding AL code: use the LSP tool when you have it
+
+If the `LSP` tool is available to you (load it with ToolSearch `select:LSP` if it is deferred),
+use it **before** Grep, Bash `grep`/`find`/`cat` or whole-file Reads for any AL symbol question:
+
+- an object by name → `workspaceSymbol` (for example "ABNAMRO", "RaboBank Auth")
+- who implements an interface → `goToImplementation` on the interface
+- a file's procedures → `documentSymbol`, then Read only the lines you need
+- callers → `findReferences`; for calls made through an interface
+  (`IHttpFactory.GetRequestEntryIDLog().LogRequestEntryID(...)`) ask on the **interface member**,
+  because asking on the implementing procedure returns no callers
+
+"Server is starting" or "not finished indexing" means retry after `sleep 10`, not "no results".
+Keep Grep for setup-files JSON, for non-AL text, and for symbols from dependencies (Microsoft base
+app, other Continia apps), which the server may not resolve. Without the LSP tool, search as before.
+
 ## Inputs
 
 - The **confirmed** domain plan fragments (auth / export / import / assisted-setup), the **Setup
