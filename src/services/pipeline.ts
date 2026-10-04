@@ -4,6 +4,7 @@ import type {
   AgentOverrides,
   AgentRunResult,
   AppConfig,
+  ImplementResult,
   ItemProcessResult,
   JobPhase,
   JobRecord,
@@ -25,6 +26,9 @@ import type { PhaseInputs } from './entry-phase.ts';
 
 /** Times a planning session that stopped early is resumed before it fails. */
 const MAX_PLANNING_NUDGES = 2;
+
+/** Times an implement session that stopped with tasks unfinished is resumed before it fails. */
+const MAX_IMPLEMENT_NUDGES = 2;
 
 /** Artifacts live here inside the banking worktree; git-excluded, never committed. */
 const AGENT_DIR = '.agent';
@@ -106,6 +110,7 @@ export function pathsFor(bankingWorktree: string): prompts.PhasePaths {
     taskListPath: join(agentDir, 'plan', 'tasklist.json'),
     verifyResultPath: join(agentDir, 'verify', 'result.json'),
     implementSummaryPath: join(agentDir, 'implement', 'summary.json'),
+    implementResultPath: join(agentDir, 'implement', 'result.json'),
   };
 }
 
@@ -208,7 +213,23 @@ async function runPhaseAgent(
     );
   }
 
-  const budgetUsd = Math.min(config.agentMaxBudgetUsd, remaining);
+  // Planning also draws on its own cumulative cap, so clarify rounds cannot
+  // spend the money implement needs.
+  const isPlanning = phase === 'planning';
+  const planningSpent = store.get(item.id)?.planningSpentUsd ?? 0;
+  const planningRemaining = config.planningMaxBudgetUsd - planningSpent;
+  if (isPlanning && planningRemaining <= 0) {
+    throw new Error(
+      `Planning budget exhausted: $${planningSpent.toFixed(2)} of ` +
+        `$${config.planningMaxBudgetUsd} already spent on planning, so another planning ` +
+        'run was not started. Raise PLANNING_MAX_BUDGET_USD or run ' +
+        `\`reset-budget ${item.id}\` to allow more planning on this work item.`,
+    );
+  }
+
+  const budgetUsd = isPlanning
+    ? Math.min(config.agentMaxBudgetUsd, remaining, planningRemaining)
+    : Math.min(config.agentMaxBudgetUsd, remaining);
   const result = await deps.runAgent(config, prompt, {
     cwd: ctx.worktrees.banking,
     additionalDirectories: [ctx.worktrees.setupFiles],
@@ -219,7 +240,12 @@ async function runPhaseAgent(
   });
 
   const total = spent + result.costUsd;
-  store.update(item.id, { spentUsd: total });
+  store.update(
+    item.id,
+    isPlanning
+      ? { spentUsd: total, planningSpentUsd: planningSpent + result.costUsd }
+      : { spentUsd: total },
+  );
   store.save();
   log(
     `  Item #${item.id}: ${phase} cost $${result.costUsd.toFixed(2)} — ` +
@@ -377,6 +403,27 @@ export async function runPlanningPhase(ctx: PhaseContext): Promise<PlanQuestions
   };
 }
 
+/**
+ * Whether a planning round's questions hand the job back to the human.
+ *
+ * Blocking questions pause up to `maxClarifyRounds`. Ambiguities alone — calls
+ * the planner already made, each with a documented default — pause only for
+ * the first `maxAmbiguityRounds` rounds: the human sees every decision once,
+ * and after that the job proceeds on the defaults instead of paying for
+ * another plan revision per round.
+ */
+export function shouldPauseForAnswers(
+  config: AppConfig,
+  questions: PlanQuestions,
+  roundsSoFar: number,
+): boolean {
+  if (questions.blocking.length > 0) return roundsSoFar < config.maxClarifyRounds;
+  if (questions.ambiguities.length > 0) {
+    return roundsSoFar < Math.min(config.maxAmbiguityRounds, config.maxClarifyRounds);
+  }
+  return false;
+}
+
 /** Post the questions, hand the item back to the human, and stop. */
 export async function runAwaitingAnswersPhase(
   ctx: PhaseContext,
@@ -385,7 +432,11 @@ export async function runAwaitingAnswersPhase(
   const { config, item, store, deps } = ctx;
 
   const round = ctx.job.clarifyRounds + 1;
-  const isFinalRound = round >= config.maxClarifyRounds;
+  // Final when the next round could not pause for these questions again. With
+  // no blocking question that is the ambiguity cap, usually reached sooner.
+  const isFinalRound =
+    round >= config.maxClarifyRounds ||
+    (questions.blocking.length === 0 && round >= config.maxAmbiguityRounds);
 
   const comment = prompts.buildQuestionsComment(config, questions, round, isFinalRound);
   await deps.addWorkItemComment(config, item.id, comment);
@@ -411,7 +462,25 @@ export async function runImplementPhase(ctx: PhaseContext): Promise<string> {
 
   store.setPhase(item.id, 'implementing');
   store.save();
+
+  // A full build costs tens of dollars. Starting one on what planning left over
+  // buys a partial build that looks finished, so fail here instead; the
+  // worktree stays and a retry after reset-budget resumes at implement.
+  const spent = store.get(item.id)?.spentUsd ?? 0;
+  const remaining = config.jobMaxBudgetUsd - spent;
+  if (remaining < config.implementMinBudgetUsd) {
+    throw new Error(
+      `Only $${Math.max(remaining, 0).toFixed(2)} of the job budget is left ` +
+        `($${spent.toFixed(2)} of $${config.jobMaxBudgetUsd} spent), less than the ` +
+        `$${config.implementMinBudgetUsd} implement needs (IMPLEMENT_MIN_BUDGET_USD), so ` +
+        `implement was not started. Run \`reset-budget ${item.id}\` or raise ` +
+        'JOB_MAX_BUDGET_USD, then re-add the trigger tag to resume at implement.',
+    );
+  }
+
   log(`  Item #${item.id}: implementing`);
+
+  const taskIds = readTaskIds(deps, paths);
 
   const prompt = prompts.buildImplementPrompt(
     config,
@@ -421,22 +490,102 @@ export async function runImplementPhase(ctx: PhaseContext): Promise<string> {
     ctx.worktrees.setupFiles,
   );
 
-  const result = await runPhaseAgent(
+  let result = await runPhaseAgent(
     ctx,
     'implementing',
     prompt,
     logPath(config, item.id, 'implement'),
   );
 
-  // Written as an artifact, not just returned, so publish can read it even
-  // when it is entered directly rather than falling through from implement.
-  writeFileSync(
-    paths.implementSummaryPath,
-    JSON.stringify({ summary: result.text }, null, 2),
-    'utf-8',
-  );
+  // An implement agent that stops partway still ends with `success` — one
+  // built a third of #83634's plan, said so only in prose, and was published.
+  // The per-task report decides whether the build is finished. Resuming the
+  // cached session costs far less than a fresh run re-reading plan and repo.
+  // The SDK reports a resumed session's cost cumulatively; track the session's
+  // total so each nudge is charged only what it added.
+  let sessionCostUsd = result.costUsd;
+  let report = deps.readJsonArtifact<ImplementResult>(paths.implementResultPath);
+  let missing = unreportedTasks(taskIds, report);
+  for (
+    let nudge = 1;
+    nudge <= MAX_IMPLEMENT_NUDGES && result.sessionId !== undefined && missing.length > 0;
+    nudge++
+  ) {
+    log(
+      `  Item #${item.id}: implement stopped with ${missing.length} task(s) unfinished — ` +
+        `resuming it (nudge ${nudge})`,
+    );
+    result = await runPhaseAgent(
+      ctx,
+      'implementing',
+      prompts.buildImplementNudge(paths, missing),
+      logPath(config, item.id, `implement-nudge-${nudge}`),
+      { resumeSessionId: result.sessionId, costBaselineUsd: sessionCostUsd },
+    );
+    sessionCostUsd += result.costUsd;
+    report = deps.readJsonArtifact<ImplementResult>(paths.implementResultPath);
+    missing = unreportedTasks(taskIds, report);
+  }
 
-  return result.text;
+  if (missing.length > 0) {
+    throw new Error(
+      `Implement finished with ${missing.length} of ${taskIds.length} task(s) not done ` +
+        `(${missing.join(', ')}), so the build is incomplete and was not verified or ` +
+        'published. The worktree is kept; a retry resumes at implement.',
+    );
+  }
+
+  const blocked = (report?.tasks ?? []).filter((t) => t.status === 'blocked');
+  if (blocked.length > 0) {
+    throw new Error(
+      `Implement reported ${blocked.length} task(s) it cannot do as planned: ` +
+        blocked.map((t) => `${t.id} (${t.note ?? 'no reason given'})`).join('; ') +
+        '. Fix the plan or the repo, then retry.',
+    );
+  }
+
+  const summary = report?.summary?.trim() || result.text;
+
+  // Written only once the build is complete: verify's entry check keys on this
+  // file, so an unfinished build must never leave it behind. Publish reads it
+  // too, so it works when entered directly rather than falling through from
+  // implement.
+  writeFileSync(paths.implementSummaryPath, JSON.stringify({ summary }, null, 2), 'utf-8');
+
+  return summary;
+}
+
+/** Task ids from plan/tasklist.json. A list with none cannot show a build finished, so it fails. */
+function readTaskIds(deps: PipelineDeps, paths: prompts.PhasePaths): Array<number | string> {
+  const taskList = deps.readJsonArtifact<{ tasks?: Array<{ id?: number | string }> }>(
+    paths.taskListPath,
+  );
+  const ids = (Array.isArray(taskList?.tasks) ? taskList.tasks : [])
+    .map((t) => t.id)
+    .filter((id): id is number | string => id !== undefined);
+  if (ids.length === 0) {
+    throw new Error(
+      `The task list at ${paths.taskListPath} has no tasks, so implement has nothing ` +
+        'to build and no way to show it finished. Re-plan this work item.',
+    );
+  }
+  return ids;
+}
+
+/**
+ * Task ids the report does not account for. `blocked` counts as accounted
+ * for — resuming will not unblock it — and is failed on separately.
+ */
+export function unreportedTasks(
+  taskIds: Array<number | string>,
+  report: ImplementResult | undefined,
+): Array<number | string> {
+  const reported = new Set(
+    (Array.isArray(report?.tasks) ? report.tasks : [])
+      .filter((t) => t.status === 'done' || t.status === 'blocked')
+      .map((t) => String(t.id)),
+  );
+  return taskIds.filter((id) => !reported.has(String(id)));
 }
 
 export async function runVerifyPhase(ctx: PhaseContext): Promise<VerifyResult> {
@@ -702,7 +851,7 @@ export async function runJob(
       const questions = await runPlanningPhase(ctx);
       const unresolved = questions.blocking.length + questions.ambiguities.length;
 
-      if (unresolved > 0 && ctx.job.clarifyRounds < config.maxClarifyRounds) {
+      if (shouldPauseForAnswers(config, questions, ctx.job.clarifyRounds)) {
         await runAwaitingAnswersPhase(ctx, questions);
         return { itemId: item.id, processed: true, phase: 'awaiting-answers' };
       }
@@ -710,7 +859,7 @@ export async function runJob(
       if (unresolved > 0) {
         log(
           `  Item #${item.id}: ${unresolved} item(s) still open after ` +
-            `${config.maxClarifyRounds} round(s) — proceeding on documented defaults`,
+            `${ctx.job.clarifyRounds} round(s) — proceeding on documented defaults`,
         );
       }
     }
@@ -870,7 +1019,14 @@ export function failedPhaseLog(
     Array.from({ length: MAX_PLANNING_NUDGES }, (_, i) => `plan-${n}-nudge-${MAX_PLANNING_NUDGES - i}`).concat(
       `plan-${n}`,
     );
-  const candidates = ['verify', 'implement', ...planRound(3), ...planRound(2), ...planRound(1)];
+  // Likewise the last implement nudge is newer than the first implement run.
+  const implement = Array.from(
+    { length: MAX_IMPLEMENT_NUDGES },
+    (_, i) => `implement-nudge-${MAX_IMPLEMENT_NUDGES - i}`,
+  ).concat('implement');
+  // The round after the last clarify round plans too (on documented defaults).
+  const rounds = Array.from({ length: config.maxClarifyRounds + 1 }, (_, i) => config.maxClarifyRounds + 1 - i);
+  const candidates = ['verify', ...implement, ...rounds.flatMap(planRound)];
   for (const phase of candidates) {
     const path = logPath(config, itemId, phase);
     if (deps.tailLog(path, 1) !== '(no log)') return path;

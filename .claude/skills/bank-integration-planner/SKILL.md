@@ -44,9 +44,28 @@ Two repos, two pull requests, one machine-readable questions file.
 
   Write the file **even when both arrays are empty** — empty is the signal that the plan is
   clear and the build can start. A Phase 1 gate populates `blocking` and stops; residual
-  NEEDS-INFO from Phases 4 and 6 populates it too. Never leave a gap silently filled: if you
-  chose a default, it belongs in `ambiguities` with the decision stated so a human can
-  correct it.
+  NEEDS-INFO from Phases 4 and 6 populates it too. Never leave a gap silently filled: every
+  default you chose is recorded with its reasoning — in `ambiguities` when a person must be
+  able to correct it, otherwise in the design doc.
+
+  Every entry costs a human's time to answer and a plan revision to apply, so `ambiguities`
+  holds only what a person outside the planning has to decide. One run listed 43 entries,
+  fewer than half of which a human could act on, and the next round repeated 21 of them
+  unchanged. Rules:
+
+  1. **Only what a person decides.** An entry must be about externally visible behavior: the
+     Online/bank API contract, product scope, or what the user sees and does. Calls about
+     internal structure, testability, overloads, polling mechanics or the plan's own flow are
+     engineering decisions — record them in the design doc's **Decisions & Limitations**
+     with their precedent, not in `questions.json`. Never ask a human how your own plan works.
+  2. **One entry per decision.** Do not list the same call twice under different ids (an
+     orchestrator decision that repeats an open question, a "consolidated" entry beside the
+     entries it consolidates). Merge them into one entry.
+  3. **Go-live checks are not questions.** "Confirm before go-live", "deployment state
+     unknown, no code impact" and similar go into **Decisions & Limitations** as go-live
+     prerequisites.
+  4. **At most 10 ambiguities**, ranked by the cost of being wrong (most costly first). The
+     rest go into the design doc's **Decisions & Limitations** with their default.
 
 Orchestration uses the `Agent` tool with `subagent_type: "general-purpose"`, dispatched in parallel (same pattern as the `code-review` skill). This repo does not use the `Workflow` tool.
 
@@ -207,8 +226,12 @@ the first round. Revision keeps the parts the answers do not touch.
    and setup data. In the task list, change, add or remove only the affected tasks. Keep the
    ids of unchanged tasks, and keep every object id already reserved. Reserve ids (rule 5) only
    for objects that are new in this round.
-6. **Write the outputs.** A fresh `questions.json` with resolved items removed and anything
-   still open kept. `artifacts.json` with `revisionMode: "incremental"` and a `revisionReason`
+6. **Write the outputs.** A fresh `questions.json` listing only what this round leaves open.
+   An ambiguity the human has already seen and no answer contradicts is **accepted** —
+   silence is consent — so drop it, even when nobody replied to it. List only ambiguities
+   that are new this round, or whose decision an answer changed; keep a blocking question
+   only while it is still unanswered. The rules in the Output contract (only what a person
+   decides, no duplicates, no go-live checks, at most 10) apply to every round. `artifacts.json` with `revisionMode: "incremental"` and a `revisionReason`
    naming which answers changed which sections. Then the Phase 9 summary as usual.
 
 ## References

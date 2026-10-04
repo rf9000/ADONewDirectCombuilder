@@ -15,7 +15,8 @@ Every `POLL_INTERVAL_MINUTES` (default 5) it queries Azure DevOps for work items
    planner had to make a call — is posted as a work item comment. The bot then swaps the
    `create-new-comm` tag for `create-new-comm-waiting` and stops. Answer in a comment, re-add
    `create-new-comm`, and the next poll resumes the loop. This repeats until the plan comes
-   back clean or `MAX_CLARIFY_ROUNDS` is reached.
+   back clean or `MAX_CLARIFY_ROUNDS` is reached. Ambiguities alone pause only for the first
+   `MAX_AMBIGUITY_ROUNDS` round(s) (default 1); after that the job proceeds on the defaults.
 4. **Implements** the plan in a git worktree per repo: AL objects in **Continia Banking**,
    configuration JSON in the **setup-files** repo.
 5. **Verifies** on a real BC environment — `continia-env-setup` → `continia-deps` →
@@ -168,7 +169,7 @@ depend on MCP — they go through the Azure DevOps REST client in `src/sdk/`.
 | `status` | Config summary plus every tracked job and its phase |
 | `reset-state` / `reset-item <id>` | Forget job state so an item runs from scratch |
 | `cleanup-worktrees <id>` | Remove leftover worktrees for a work item |
-| `reset-budget <id>` | Zero a work item's recorded spend so it can run again after hitting `JOB_MAX_BUDGET_USD` |
+| `reset-budget <id>` | Zero a work item's recorded spend (job and planning) so it can run again after hitting `JOB_MAX_BUDGET_USD`, `PLANNING_MAX_BUDGET_USD` or `IMPLEMENT_MIN_BUDGET_USD` |
 | `experiment plan <id>` | Run planning variants locally on frozen input and compare cost and quality; see `experiments/README.md` |
 
 Add `--dry-run` to `run-once` / `run-item` to read the work item and its comments and stop

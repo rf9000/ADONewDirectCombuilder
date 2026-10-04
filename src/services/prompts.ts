@@ -105,6 +105,11 @@ export interface PhasePaths {
    * the same process.
    */
   implementSummaryPath: string;
+  /**
+   * The implement agent's per-task report. The orchestrator checks it against
+   * the task list, so a run that stops partway cannot pass for a finished one.
+   */
+  implementResultPath: string;
 }
 
 export function buildPlanningPrompt(
@@ -131,6 +136,10 @@ export function buildPlanningPrompt(
           'You previously asked the questions below. The answers are in the comment',
           'thread above — read the newest comments first, apply them, and only ask',
           'again about things that are still genuinely unresolved.',
+          '',
+          'An ambiguity listed below that no answer contradicts is accepted as decided:',
+          'do not list it again. List only ambiguities that are new this round, or whose',
+          'decision an answer changed.',
           '',
           '```json',
           JSON.stringify(previousQuestions, null, 2),
@@ -171,8 +180,15 @@ create any branch in this phase.
 
    - \`blocking\`: anything you genuinely cannot plan soundly without an answer.
      Never invent endpoints, field names, or auth flows to fill a gap — ask.
-   - \`ambiguities\`: things that were unclear where you made a defensible call.
-     State the decision so a human can correct it.
+   - \`ambiguities\`: things that were unclear where you made a defensible call that a
+     person outside the planning must be able to correct. State the decision.
+     - Only externally visible behavior: the Online/bank API contract, product scope,
+       or what the user sees. Internal design, testability and the plan's own flow are
+       engineering calls for the design doc's Decisions & Limitations — never ask a human
+       how your own plan works.
+     - One entry per decision; no duplicates under different ids.
+     - Go-live checks with no code impact go in the design doc, not here.
+     - At most 10, most costly-if-wrong first; the rest go in the design doc.
    - Both empty means "the plan is clear and complete".
 
 2. \`${paths.artifactsPath}\` — JSON describing what you produced:
@@ -344,8 +360,43 @@ header mappings go in setup-files. Do not duplicate configuration as hard-coded 
   handles all git operations.
 - Do not touch \`.claude/\` — those are symlinks into the orchestrator's own repo.
 
-When you are done, reply with a bullet list of the changes you made, grouped by repo.
-Keep it to what a reviewer needs: this text becomes the pull request description.`;
+## Required artifact — finish every task
+
+Build the whole task list in this run. Do not stop partway to save time or budget, and
+do not hand unfinished tasks to "the next run": the orchestrator checks this report
+against the task list, and an incomplete build is sent back to you, not to review.
+
+Keep \`${paths.implementResultPath}\` up to date as you finish each task, so the report
+survives an interruption. If the file already exists, an earlier run wrote it — keep
+its \`done\` entries and continue with the rest:
+
+\`\`\`json
+{
+  "summary": "- continia-banking: ...\\n- setup-files: ...",
+  "tasks": [
+    { "id": 1, "status": "done" },
+    { "id": 7, "status": "blocked", "note": "why this task cannot be done" }
+  ]
+}
+\`\`\`
+
+- One entry per task \`id\` in the task list. \`done\` means built as the task specifies.
+- \`blocked\` is only for a task that cannot be done as specified — a contradiction in the
+  plan or something missing from the repo — never for one you have not got to yet. Say
+  why in \`note\`. A blocked task fails the job for a human to look at.
+- \`summary\` is a bullet list of the changes, grouped by repo, kept to what a reviewer
+  needs: it becomes the pull request description.`;
+}
+
+/** Resume an implement session that stopped with tasks still unreported. */
+export function buildImplementNudge(paths: PhasePaths, remaining: Array<number | string>): string {
+  return `You stopped before finishing: these task ids from \`${paths.taskListPath}\` are not
+marked \`done\` in \`${paths.implementResultPath}\`: ${remaining.join(', ')}.
+
+Continue from where you stopped. Do not start over and do not redo finished tasks. A
+subagent that had not reported back when you stopped is gone: redo its step yourself or
+dispatch it again. Build every remaining task, and update \`${paths.implementResultPath}\`
+as the original instructions specify, including its \`summary\` of all changes.`;
 }
 
 export function buildVerifyPrompt(
@@ -484,7 +535,16 @@ export function buildQuestionsComment(
 
   lines.push('', '<hr/>', '');
 
-  if (isFinalRound) {
+  if (isFinalRound && questions.blocking.length === 0 && round < config.maxClarifyRounds) {
+    // Only the ambiguity cap is reached: a new blocking question could still
+    // pause a later round, so do not promise never to ask again.
+    lines.push(
+      '<b>Last review of these decisions.</b> I will not pause for them again — on the ' +
+        'next run I proceed on the decisions above, with any corrections you give, and ' +
+        'only stop again if something blocks the plan. ' +
+        `<b>Re-add the ${trigger} tag</b> to run with whatever you have provided.`,
+    );
+  } else if (isFinalRound) {
     lines.push(
       `<b>Last clarification round (${round} of ${config.maxClarifyRounds}).</b> ` +
         'I will not ask again — on the next run I proceed on the decisions above, ' +

@@ -167,7 +167,7 @@ switch (command) {
       break;
     }
     const previous = job.spentUsd ?? 0;
-    stateStore.update(itemId, { spentUsd: 0 });
+    stateStore.update(itemId, { spentUsd: 0, planningSpentUsd: 0 });
     stateStore.save();
     console.log(`Spend for #${itemId} reset (was $${previous.toFixed(2)})`);
     break;

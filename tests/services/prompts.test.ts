@@ -5,6 +5,7 @@ import {
   buildWorkItemContext,
   buildQuestionsComment,
   buildImplementPrompt,
+  buildImplementNudge,
   buildPlanningNudge,
   buildPlanningPrompt,
   escapeHtml,
@@ -22,6 +23,7 @@ const TEST_PATHS: PhasePaths = {
   taskListPath: '/work/.agent/plan/tasklist.json',
   verifyResultPath: '/work/.agent/verify/result.json',
   implementSummaryPath: '/work/.agent/implement/summary.json',
+  implementResultPath: '/work/.agent/implement/result.json',
 };
 
 describe('htmlToText', () => {
@@ -155,6 +157,18 @@ describe('buildQuestionsComment', () => {
     expect(comment).toContain('I will not ask again');
   });
 
+  test('a last ambiguity review does not promise never to ask again', () => {
+    const comment = buildQuestionsComment(
+      mockConfig(),
+      { blocking: [], ambiguities: questions.ambiguities },
+      1,
+      true,
+    );
+    expect(comment).toContain('Last review of these decisions');
+    expect(comment).toContain('only stop again if something blocks the plan');
+    expect(comment).not.toContain('I will not ask again');
+  });
+
   test('omits a section that has no entries', () => {
     const comment = buildQuestionsComment(
       mockConfig(),
@@ -232,6 +246,31 @@ describe('buildImplementPrompt', () => {
     expect(prompt).toContain('Continue the plan');
     expect(prompt).toContain('Ninja MCP');
   });
+
+  test('requires a per-task report and forbids stopping partway', () => {
+    const prompt = buildImplementPrompt(
+      mockConfig(),
+      'work item context',
+      TEST_PATHS,
+      '/worktrees/banking',
+      '/worktrees/setupFiles',
+    );
+
+    expect(prompt).toContain(TEST_PATHS.implementResultPath);
+    expect(prompt).toContain('Do not stop partway');
+    expect(prompt).toContain('"status": "blocked"');
+    // The JSON example must show an escaped newline, not break the line.
+    expect(prompt).toContain('...\\n- setup-files');
+  });
+});
+
+describe('buildImplementNudge', () => {
+  test('names the unfinished tasks and the report to update', () => {
+    const nudge = buildImplementNudge(TEST_PATHS, [5, 6, 'T-9']);
+    expect(nudge).toContain('5, 6, T-9');
+    expect(nudge).toContain(TEST_PATHS.implementResultPath);
+    expect(nudge).toContain('Do not start over');
+  });
 });
 
 describe('buildWorkItemContext orchestration note', () => {
@@ -275,5 +314,26 @@ describe('revision mode prompt', () => {
   test('moves the old plan aside before falling back to a full re-plan', () => {
     const prompt = buildPlanningPrompt(mockConfig(), 'ctx', TEST_PATHS, '/b', '/s', { blocking: [], ambiguities: [] }, 'revision');
     expect(prompt).toContain('plan/superseded/');
+  });
+});
+
+describe('planning prompt question rules', () => {
+  test('keeps internal design out of the human questions and caps ambiguities', () => {
+    const prompt = buildPlanningPrompt(mockConfig(), 'ctx', TEST_PATHS, '/b', '/s');
+    expect(prompt).toContain('never ask a human');
+    expect(prompt).toContain('how your own plan works');
+    expect(prompt).toContain('no duplicates');
+    expect(prompt).toContain('Go-live checks');
+    expect(prompt).toContain('At most 10');
+  });
+
+  test('a follow-up round treats uncontradicted ambiguities as accepted', () => {
+    const previous: PlanQuestions = {
+      blocking: [],
+      ambiguities: [{ question: 'Format?', decisionTaken: 'CAMT.053' }],
+    };
+    const prompt = buildPlanningPrompt(mockConfig(), 'ctx', TEST_PATHS, '/b', '/s', previous, 'revision');
+    expect(prompt).toContain('no answer contradicts is accepted as decided');
+    expect(prompt).toContain('do not list it again');
   });
 });

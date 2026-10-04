@@ -42,6 +42,11 @@ const envSchema = z.object({
   POLL_INTERVAL_MINUTES: z.coerce.number().positive().default(5),
   JOB_TIMEOUT_MINUTES: z.coerce.number().positive().default(240),
   MAX_CLARIFY_ROUNDS: z.coerce.number().int().nonnegative().default(3),
+  // Rounds that pause only for ambiguities (decisions the planner already made
+  // a call on). #83634 paused four times on 43, 33, 25 and 7 of them with no
+  // blocking question at all, and each answered round paid for a plan revision.
+  // Blocking questions still pause up to MAX_CLARIFY_ROUNDS.
+  MAX_AMBIGUITY_ROUNDS: z.coerce.number().int().nonnegative().default(1),
 
   // --- Claude ---
   // Each bot in the stack carries its own key so spend stays attributable. The
@@ -58,6 +63,13 @@ const envSchema = z.object({
   // cumulative across rounds and retries and is enforced by the pipeline.
   AGENT_MAX_BUDGET_USD: z.coerce.number().positive().default(60),
   JOB_MAX_BUDGET_USD: z.coerce.number().positive().default(150),
+  // Planning can loop through several clarify rounds and, left uncapped, spend
+  // the whole job budget: #83634 spent $98 of $100 planning and left implement
+  // $1.69, so it built a third of the plan and still opened a PR. Planning gets
+  // its own cumulative cap, and implement refuses to start on less than its
+  // minimum, so the job fails resumably instead of buying a partial build.
+  PLANNING_MAX_BUDGET_USD: z.coerce.number().positive().default(60),
+  IMPLEMENT_MIN_BUDGET_USD: z.coerce.number().nonnegative().default(40),
   // Plugin folder holding the AL language server (e.g. the claude-code-lsps
   // al-language-server-go-* plugin). Empty keeps agents on grep alone.
   AL_LSP_PLUGIN_DIR: z.string().default(""),
@@ -127,6 +139,18 @@ export function loadConfig(
     );
   }
 
+  // A planning cap that leaves less than the implement minimum can never reach
+  // implement without a manual reset-budget, so reject it at boot.
+  if (parsed.PLANNING_MAX_BUDGET_USD + parsed.IMPLEMENT_MIN_BUDGET_USD > parsed.JOB_MAX_BUDGET_USD) {
+    throw new Error(
+      'Invalid configuration:\n' +
+        `  - PLANNING_MAX_BUDGET_USD ($${parsed.PLANNING_MAX_BUDGET_USD}) + ` +
+        `IMPLEMENT_MIN_BUDGET_USD ($${parsed.IMPLEMENT_MIN_BUDGET_USD}) must not exceed ` +
+        `JOB_MAX_BUDGET_USD ($${parsed.JOB_MAX_BUDGET_USD}), or a fully planned job ` +
+        'cannot afford to implement',
+    );
+  }
+
   return {
     org: parsed.AZURE_DEVOPS_ORG,
     orgUrl: `https://dev.azure.com/${parsed.AZURE_DEVOPS_ORG}`,
@@ -145,11 +169,14 @@ export function loadConfig(
     pollIntervalMinutes: parsed.POLL_INTERVAL_MINUTES,
     jobTimeoutMinutes: parsed.JOB_TIMEOUT_MINUTES,
     maxClarifyRounds: parsed.MAX_CLARIFY_ROUNDS,
+    maxAmbiguityRounds: parsed.MAX_AMBIGUITY_ROUNDS,
 
     claudeModel: parsed.CLAUDE_MODEL,
     agentMaxTurns: parsed.AGENT_MAX_TURNS,
     agentMaxBudgetUsd: parsed.AGENT_MAX_BUDGET_USD,
     jobMaxBudgetUsd: parsed.JOB_MAX_BUDGET_USD,
+    planningMaxBudgetUsd: parsed.PLANNING_MAX_BUDGET_USD,
+    implementMinBudgetUsd: parsed.IMPLEMENT_MIN_BUDGET_USD,
     alLspPluginDir: parsed.AL_LSP_PLUGIN_DIR.trim() || undefined,
 
     repos: {

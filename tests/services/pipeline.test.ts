@@ -15,6 +15,7 @@ import {
   prTitle,
   runPlanningPhase,
   prepareWorkspaces,
+  shouldPauseForAnswers,
   pathsFor,
   type PipelineDeps,
   type PhaseContext,
@@ -23,6 +24,7 @@ import { BOT_COMMENT_MARKER } from '../../src/services/prompts.ts';
 import type { PhasePaths } from '../../src/services/prompts.ts';
 import type {
   AppConfig,
+  ImplementResult,
   JobRecord,
   PlanQuestions,
   PullRequestRef,
@@ -40,6 +42,29 @@ const OPEN_PLAN: PlanQuestions = {
   blocking: [{ question: 'Which auth flow?' }],
   ambiguities: [],
 };
+/** A two-task plan; implement must report both before the build counts as finished. */
+const TASK_LIST = {
+  waves: [{ wave: 1 }],
+  tasks: [
+    { id: 1, wave: 1, title: 'Create codeunit Acme Auth' },
+    { id: 2, wave: 1, title: 'Register Acme in CommunicationType enum' },
+  ],
+};
+const DONE_REPORT: ImplementResult = {
+  summary: '- continia-banking: Acme codeunits',
+  tasks: [
+    { id: 1, status: 'done' },
+    { id: 2, status: 'done' },
+  ],
+};
+
+/** Write implement/result.json the way the implement agent is told to. */
+function writeImplementReport(cwd: string, report: ImplementResult): void {
+  const dir = join(cwd, '.agent', 'implement');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'result.json'), JSON.stringify(report), 'utf-8');
+}
+
 const PASSING_VERIFY: VerifyResult = {
   passed: true,
   envId: 'env-1',
@@ -82,10 +107,18 @@ interface FakeOptions {
   failPhase?: string;
   /** Plan files the fake planner leaves out, as a planner that stopped early would. */
   omitPlanFiles?: string[];
+  /**
+   * What the n-th implement run (first run, then each nudge) leaves in
+   * implement/result.json; `null` leaves the file as it was. Runs past the
+   * end of the list repeat its last entry. Default: every task done.
+   */
+  implementReports?: Array<ImplementResult | null>;
 }
 
 function makeDeps(fake: FakeOptions = {}): PipelineDeps {
   const changed = new Set(fake.changedRepos ?? ['banking', 'setupFiles']);
+  const implementReports = fake.implementReports ?? [DONE_REPORT];
+  let implementRuns = 0;
 
   const worktreeFor = (key: string, itemId: number) =>
     join(root, 'worktrees', String(itemId), key);
@@ -167,8 +200,15 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
         // The real planner writes this too (pathsFor maps taskListPath here).
         // Task 5's dispatch gates entry at 'implementing' on this file's
         // presence, so a real planning run must leave it behind.
-        writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
+        writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify(TASK_LIST), 'utf-8');
         for (const file of fake.omitPlanFiles ?? []) rmSync(join(planDir, file), { force: true });
+      }
+
+      if (!isPlan && !isVerify) {
+        const report =
+          implementReports[Math.min(implementRuns, implementReports.length - 1)];
+        implementRuns += 1;
+        if (report) writeImplementReport(options.cwd, report);
       }
 
       if (isVerify) {
@@ -241,7 +281,7 @@ function seedArtifactsFor(phase: JobRecord['phase'], itemId: number): void {
   if (phase === 'implementing') {
     const planDir = join(agentDir, 'plan');
     mkdirSync(planDir, { recursive: true });
-    writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
+    writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify(TASK_LIST), 'utf-8');
   }
 
   if (phase === 'verifying' || phase === 'publishing') {
@@ -386,6 +426,67 @@ describe('runJob — clarification loop', () => {
     const comment = (deps.addWorkItemComment as ReturnType<typeof mock>).mock
       .calls[0]![2] as string;
     expect(comment).toContain('CAMT.053');
+    // The human sees these decisions once; the comment says it will not pause for them again.
+    expect(comment).toContain('Last review of these decisions');
+  });
+
+  test('ambiguities alone do not pause a second time — the job proceeds on the defaults', async () => {
+    // #83634 paused on 43, 33, 25 and 7 ambiguities with no blocking question.
+    const AMBIGUOUS: PlanQuestions = {
+      blocking: [],
+      ambiguities: [{ question: 'Format?', decisionTaken: 'CAMT.053' }],
+    };
+    await runJob(config(), mockWorkItem(), store, makeDeps({ questions: AMBIGUOUS }));
+    expect(store.get(42)?.clarifyRounds).toBe(1);
+
+    const deps = makeDeps({ questions: AMBIGUOUS });
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('done');
+    expect(deps.createPullRequest).toHaveBeenCalledTimes(2);
+  });
+
+  test('a blocking question still pauses after the ambiguity rounds are used up', async () => {
+    await runJob(
+      config(),
+      mockWorkItem(),
+      store,
+      makeDeps({ questions: { blocking: [], ambiguities: [{ question: 'Format?' }] } }),
+    );
+
+    const result = await runJob(config(), mockWorkItem(), store, makeDeps({ questions: OPEN_PLAN }));
+
+    expect(result.phase).toBe('awaiting-answers');
+    expect(store.get(42)?.clarifyRounds).toBe(2);
+  });
+});
+
+describe('shouldPauseForAnswers', () => {
+  const amb: PlanQuestions = { blocking: [], ambiguities: [{ question: 'Format?' }] };
+  const cfg = (maxClarifyRounds: number, maxAmbiguityRounds: number) =>
+    config({ maxClarifyRounds, maxAmbiguityRounds });
+
+  test('a clean plan never pauses', () => {
+    expect(shouldPauseForAnswers(cfg(3, 1), CLEAN_PLAN, 0)).toBe(false);
+  });
+
+  test('blocking questions pause up to MAX_CLARIFY_ROUNDS', () => {
+    expect(shouldPauseForAnswers(cfg(3, 1), OPEN_PLAN, 2)).toBe(true);
+    expect(shouldPauseForAnswers(cfg(3, 1), OPEN_PLAN, 3)).toBe(false);
+  });
+
+  test('ambiguities alone pause up to MAX_AMBIGUITY_ROUNDS', () => {
+    expect(shouldPauseForAnswers(cfg(3, 1), amb, 0)).toBe(true);
+    expect(shouldPauseForAnswers(cfg(3, 1), amb, 1)).toBe(false);
+    expect(shouldPauseForAnswers(cfg(3, 2), amb, 1)).toBe(true);
+  });
+
+  test('the ambiguity cap never exceeds MAX_CLARIFY_ROUNDS', () => {
+    expect(shouldPauseForAnswers(cfg(1, 5), amb, 1)).toBe(false);
+  });
+
+  test('zero ambiguity rounds never pauses for ambiguities', () => {
+    expect(shouldPauseForAnswers(cfg(3, 0), amb, 0)).toBe(false);
   });
 });
 
@@ -510,8 +611,10 @@ describe('runJob — failures', () => {
             'utf-8',
           );
           // A complete plan; without it planning itself now fails, before verify.
-          writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify({ waves: [] }), 'utf-8');
+          writeFileSync(join(planDir, 'tasklist.json'), JSON.stringify(TASK_LIST), 'utf-8');
           writeFileSync(join(planDir, 'artifacts.json'), '{}', 'utf-8');
+        } else if (!prompt.includes('Build and test the changes')) {
+          writeImplementReport(options.cwd, DONE_REPORT);
         }
         return Promise.resolve({
           text: 'ok',
@@ -693,6 +796,151 @@ describe('runJob — spend caps', () => {
     await runJob(config(), mockWorkItem(), store, makeDeps());
     // Failed plan ($0) + plan + implement ($0.50 each); verify skipped.
     expect(store.get(42)?.spentUsd).toBeCloseTo(1);
+  });
+
+  test('records planning spend separately from the job total', async () => {
+    await runJob(config(), mockWorkItem(), store, makeDeps());
+    expect(store.get(42)?.planningSpentUsd).toBeCloseTo(0.5);
+    expect(store.get(42)?.spentUsd).toBeCloseTo(1);
+  });
+
+  test('lowers a planning run cap to what is left of the planning budget', async () => {
+    store.update(42, { spentUsd: 50, planningSpentUsd: 50 });
+    const deps = makeDeps();
+    await runJob(
+      config({ agentMaxBudgetUsd: 60, jobMaxBudgetUsd: 150, planningMaxBudgetUsd: 60 }),
+      mockWorkItem(),
+      store,
+      deps,
+    );
+    expect(budgets(deps)[0]).toBeCloseTo(10);
+    // Implement is not held to the planning cap.
+    expect(budgets(deps)[1]).toBeCloseTo(60);
+  });
+
+  test('an exhausted planning budget fails before starting the planner', async () => {
+    store.update(42, { spentUsd: 60, planningSpentUsd: 60 });
+    const deps = makeDeps();
+
+    const result = await runJob(
+      config({ jobMaxBudgetUsd: 150, planningMaxBudgetUsd: 60 }),
+      mockWorkItem(),
+      store,
+      deps,
+    );
+
+    expect(result.phase).toBe('failed');
+    expect(result.error).toContain('Planning budget exhausted');
+    expect(result.error).toContain('PLANNING_MAX_BUDGET_USD');
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  test('implement does not start on less than its minimum, and the job stays resumable', async () => {
+    // #83634: planning left $1.69 of $100, and implement built a third of the plan.
+    // Here $30 of $150 is left, under the $40 default minimum.
+    const deps = makeDeps();
+
+    const result = await runProcessItemAtPhase('implementing', deps, {
+      spentUsd: 120,
+      lastSeenCommentId: 3,
+    });
+
+    expect(result.phase).toBe('failed');
+    expect(result.error).toContain('IMPLEMENT_MIN_BUDGET_USD');
+    expect(result.error).toContain('reset-budget 42');
+    expect(deps.runAgent).not.toHaveBeenCalled();
+    expect(store.get(42)?.failedAtPhase).toBe('implementing');
+    expect(deps.removeAllWorktrees).not.toHaveBeenCalled();
+  });
+});
+
+describe('runJob — implement completeness', () => {
+  const PARTIAL: ImplementResult = { summary: 'partial', tasks: [{ id: 1, status: 'done' }] };
+  const implementCalls = (deps: PipelineDeps) =>
+    (deps.runAgent as ReturnType<typeof mock>).mock.calls.filter(
+      (call) =>
+        !String(call[1]).includes('bank-integration-planner') &&
+        !String(call[1]).includes('Build and test the changes'),
+    );
+  const summaryPath = () => join(agentDirFor(TEST_ITEM_ID), 'implement', 'summary.json');
+
+  test('resumes a session that stopped with tasks unfinished, then publishes', async () => {
+    const deps = makeDeps({ implementReports: [PARTIAL, DONE_REPORT] });
+
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('done');
+    const calls = implementCalls(deps);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]![2].resumeSessionId).toBe('sess-abc');
+    expect(String(calls[1]![1])).toContain('not\nmarked `done`');
+    expect(String(calls[1]![1])).toContain(': 2.');
+  });
+
+  test('fails after two nudges, without verifying, publishing or a summary', async () => {
+    const deps = makeDeps({ implementReports: [PARTIAL] });
+
+    const result = await runJob(config({ skipBuildTest: false }), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('failed');
+    expect(result.error).toContain('1 of 2 task(s) not done (2)');
+    expect(implementCalls(deps)).toHaveLength(3);
+    expect(deps.createPullRequest).not.toHaveBeenCalled();
+    expect(deps.commitAndPush).not.toHaveBeenCalled();
+    expect(store.get(42)?.failedAtPhase).toBe('implementing');
+    // verify's entry check keys on summary.json, so a retry must land on implement.
+    expect(require('fs').existsSync(summaryPath())).toBe(false);
+  });
+
+  test('a run that writes no report at all is unfinished', async () => {
+    const deps = makeDeps({ implementReports: [null] });
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+    expect(result.phase).toBe('failed');
+    expect(result.error).toContain('2 of 2 task(s) not done');
+  });
+
+  test('a blocked task fails at once with its reason, without nudging', async () => {
+    const deps = makeDeps({
+      implementReports: [
+        {
+          tasks: [
+            { id: 1, status: 'done' },
+            { id: 2, status: 'blocked', note: 'enum value already taken' },
+          ],
+        },
+      ],
+    });
+
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('failed');
+    expect(result.error).toContain('2 (enum value already taken)');
+    expect(implementCalls(deps)).toHaveLength(1);
+    expect(deps.createPullRequest).not.toHaveBeenCalled();
+  });
+
+  test('a task list without tasks fails before the agent runs', async () => {
+    const deps = makeDeps();
+    seedArtifactsFor('implementing', TEST_ITEM_ID);
+    writeFileSync(
+      join(agentDirFor(TEST_ITEM_ID), 'plan', 'tasklist.json'),
+      JSON.stringify({ waves: [] }),
+      'utf-8',
+    );
+    store.update(TEST_ITEM_ID, { phase: 'implementing', lastSeenCommentId: 3 });
+
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+    expect(result.phase).toBe('failed');
+    expect(result.error).toContain('has no tasks');
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  test('the PR description comes from the report summary', async () => {
+    const deps = makeDeps({ implementText: 'Done. Wrote the report.' });
+    await runJob(config(), mockWorkItem(), store, deps);
+    const prCall = (deps.createPullRequest as ReturnType<typeof mock>).mock.calls[0]!;
+    expect(String(prCall[2].description)).toContain('- continia-banking: Acme codeunits');
+    expect(String(prCall[2].description)).not.toContain('Wrote the report');
   });
 });
 
@@ -1019,6 +1267,7 @@ describe('runPublishPhase — direct', () => {
       taskListPath: join(agentDir, 'plan', 'tasklist.json'),
       verifyResultPath: join(agentDir, 'verify', 'result.json'),
       implementSummaryPath,
+      implementResultPath: join(agentDir, 'implement', 'result.json'),
     };
 
     return {
@@ -1206,6 +1455,26 @@ describe('failedPhaseLog', () => {
       present.has(path.split(/[\\/]/).pop()!) ? 'content' : '(no log)';
 
     expect(failedPhaseLog(cfg, 42, deps)).toEndWith('plan-1-nudge-2.log');
+  });
+
+  test('quotes the last implement nudge, not the first implement run', () => {
+    const cfg = config();
+    const deps = makeDeps();
+    const present = new Set(['plan-1.log', 'implement.log', 'implement-nudge-1.log']);
+    (deps as { tailLog: unknown }).tailLog = (path: string) =>
+      present.has(path.split(/[\\/]/).pop()!) ? 'content' : '(no log)';
+
+    expect(failedPhaseLog(cfg, 42, deps)).toEndWith('implement-nudge-1.log');
+  });
+
+  test('finds the planning round that runs after the last clarify round', () => {
+    const cfg = config({ maxClarifyRounds: 3 });
+    const deps = makeDeps();
+    const present = new Set(['plan-3.log', 'plan-4.log']);
+    (deps as { tailLog: unknown }).tailLog = (path: string) =>
+      present.has(path.split(/[\\/]/).pop()!) ? 'content' : '(no log)';
+
+    expect(failedPhaseLog(cfg, 42, deps)).toEndWith('plan-4.log');
   });
 
   test('falls back to the first planning log when nothing ran', () => {

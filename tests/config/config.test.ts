@@ -30,9 +30,27 @@ describe("loadConfig", () => {
       ...validEnv,
       AGENT_MAX_BUDGET_USD: "12.5",
       JOB_MAX_BUDGET_USD: "40",
+      PLANNING_MAX_BUDGET_USD: "25",
+      IMPLEMENT_MIN_BUDGET_USD: "15",
     });
     expect(config.agentMaxBudgetUsd).toBe(12.5);
     expect(config.jobMaxBudgetUsd).toBe(40);
+    expect(config.planningMaxBudgetUsd).toBe(25);
+    expect(config.implementMinBudgetUsd).toBe(15);
+  });
+
+  it("reserves $60 for planning and $40 for implement by default", () => {
+    const config = loadConfig(validEnv);
+    expect(config.planningMaxBudgetUsd).toBe(60);
+    expect(config.implementMinBudgetUsd).toBe(40);
+  });
+
+  it("rejects a planning cap that leaves implement less than its minimum", () => {
+    // The VM's JOB_MAX_BUDGET_USD=100 with the defaults is exactly at the limit.
+    expect(() => loadConfig({ ...validEnv, JOB_MAX_BUDGET_USD: "100" })).not.toThrow();
+    expect(() => loadConfig({ ...validEnv, JOB_MAX_BUDGET_USD: "99" })).toThrow(
+      "PLANNING_MAX_BUDGET_USD",
+    );
   });
 
   it("rejects a non-positive spend cap", () => {
@@ -123,6 +141,7 @@ describe("loadConfig", () => {
     expect(config.triggerTag).toBe("create-new-comm");
     expect(config.waitingTag).toBe("create-new-comm-waiting");
     expect(config.maxClarifyRounds).toBe(3);
+    expect(config.maxAmbiguityRounds).toBe(1);
     expect(config.stateDir).toBe("/data/state");
     expect(config.skillsSourceDir).toBe("/app/.claude");
     expect(config.continiaCliPath).toBe("/usr/local/bin/continia");

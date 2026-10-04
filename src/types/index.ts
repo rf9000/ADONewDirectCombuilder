@@ -37,6 +37,8 @@ export interface AppConfig {
   pollIntervalMinutes: number;
   jobTimeoutMinutes: number;
   maxClarifyRounds: number;
+  /** Rounds that may pause when only ambiguities (no blocking questions) are open. */
+  maxAmbiguityRounds: number;
 
   // --- Claude ---
   claudeModel: string;
@@ -45,6 +47,10 @@ export interface AppConfig {
   agentMaxBudgetUsd: number;
   /** Spend cap in USD across every agent run a job has ever made. */
   jobMaxBudgetUsd: number;
+  /** Spend cap in USD across every planning run a job has made, nudges included. */
+  planningMaxBudgetUsd: number;
+  /** Implement does not start unless at least this much job budget is left. */
+  implementMinBudgetUsd: number;
   /**
    * Folder of a Claude Code plugin that provides the AL language server. When
    * set, agents load it and may use the LSP tool. Unset: no language server.
@@ -164,6 +170,11 @@ export interface JobRecord {
    * `reset-budget <id>` (or `reset-item`) sets it back to zero.
    */
   spentUsd?: number;
+  /**
+   * The planning share of `spentUsd`, checked against `planningMaxBudgetUsd`.
+   * Reset together with `spentUsd`.
+   */
+  planningSpentUsd?: number;
   updatedAt: string;
 }
 
@@ -266,6 +277,22 @@ export interface PlanArtifacts {
   /** Follow-up rounds only: whether the planner patched the plan or re-planned it. */
   revisionMode?: 'incremental' | 'full';
   revisionReason?: string;
+}
+
+/** One task's outcome, as the implement agent reports it. */
+export interface ImplementTaskStatus {
+  /** The task's `id` in plan/tasklist.json. */
+  id: number | string;
+  status: 'done' | 'blocked';
+  /** Required for `blocked`: why the task cannot be done. */
+  note?: string;
+}
+
+/** Structured result of the implement phase (implement/result.json). */
+export interface ImplementResult {
+  /** Reviewer-facing change summary; becomes the PR description. */
+  summary?: string;
+  tasks: ImplementTaskStatus[];
 }
 
 /** Structured result of the verify phase. */

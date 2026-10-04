@@ -44,7 +44,14 @@ docker-compose.
   `min(AGENT_MAX_BUDGET_USD, what is left of JOB_MAX_BUDGET_USD)` to the SDK as `maxBudgetUsd`
   and adds the run's cost to the job's `spentUsd`. `total_cost_usd` is a running total per
   query (one query can yield several results when background subagents wake it), so never sum
-  the logged values. A job over its cap fails before the next run; `reset-budget <id>` clears it
+  the logged values. A job over its cap fails before the next run; `reset-budget <id>` clears it.
+  Planning also has its own cumulative cap (`PLANNING_MAX_BUDGET_USD`), and implement does not
+  start with less than `IMPLEMENT_MIN_BUDGET_USD` left — #83634 spent $98 of $100 planning and
+  implement built a third of the plan on the remaining $1.69
+- **Implement must finish** — the implement agent keeps `implement/result.json` with a status per
+  task id in `tasklist.json`. Unreported tasks resume the session (up to twice); still-unfinished
+  or `blocked` tasks fail at `implementing` before verify. `implement/summary.json` (verify's
+  entry precondition) is written only after the check passes
 - **Planning must finish** — a planning run must write a fresh `questions.json` and
   `artifacts.json` (both are deleted before the run), and an unblocked plan must have a task list.
   A session that ends early is resumed (`resume`) up to twice with a "finish" prompt; a resumed
@@ -57,7 +64,9 @@ docker-compose.
   records `revisionMode`
 - **Serialized jobs** — one at a time; BC cannot run concurrent test jobs on one environment
 - **Tag-swap handshake** — the bot swaps the trigger tag for a waiting tag when it needs answers;
-  re-adding the trigger tag resumes the job
+  re-adding the trigger tag resumes the job. Blocking questions pause up to `MAX_CLARIFY_ROUNDS`;
+  ambiguities alone (calls already made, with defaults) pause only for `MAX_AMBIGUITY_ROUNDS`
+  (default 1), since every answered round pays for a plan revision
 
 ## Non-negotiables
 
