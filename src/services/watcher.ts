@@ -79,6 +79,8 @@ export async function runPollCycle(
   let errors = 0;
   let skipped = 0;
 
+  // Pick up CLI edits to the state file made since the last cycle.
+  stateStore.reload();
   log(`Polling for items tagged '${config.triggerTag}'...`);
 
   const items = await deps.fetchItems(config);

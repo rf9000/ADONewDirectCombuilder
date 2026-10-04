@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import type { JobPhase, JobRecord, JobState } from '../types/index.ts';
 
@@ -20,12 +20,39 @@ export class StateStore {
   private filePath: string;
   private jobs: Map<number, JobRecord>;
   private lastRunAt: string;
+  /** mtime of the file as this store last read or wrote it. */
+  private knownMtimeMs: number | undefined;
 
   constructor(stateDir: string) {
     this.filePath = join(stateDir, 'jobs.json');
     const loaded = this.load();
     this.jobs = new Map(loaded.jobs.map((job) => [job.itemId, job]));
     this.lastRunAt = loaded.lastRunAt;
+    this.knownMtimeMs = this.fileMtimeMs();
+  }
+
+  /**
+   * Re-read the state file if another process wrote it since this store last
+   * read or saved it. The watcher holds one store for its lifetime and saves
+   * all of it, so without this a CLI edit made between polls (`reset-budget`,
+   * `seed-plan`) would be overwritten by the next save. An unchanged file is
+   * left alone, so nothing this store holds in memory is thrown away.
+   */
+  reload(): void {
+    const mtime = this.fileMtimeMs();
+    if (mtime === undefined || mtime === this.knownMtimeMs) return;
+    const loaded = this.load();
+    this.jobs = new Map(loaded.jobs.map((job) => [job.itemId, job]));
+    this.lastRunAt = loaded.lastRunAt;
+    this.knownMtimeMs = mtime;
+  }
+
+  private fileMtimeMs(): number | undefined {
+    try {
+      return statSync(this.filePath).mtimeMs;
+    } catch {
+      return undefined;
+    }
   }
 
   private load(): JobState {
@@ -57,6 +84,7 @@ export class StateStore {
       lastRunAt: this.lastRunAt,
     };
     writeFileSync(this.filePath, JSON.stringify(state, null, 2), 'utf-8');
+    this.knownMtimeMs = this.fileMtimeMs();
   }
 
   get(itemId: number): JobRecord | undefined {

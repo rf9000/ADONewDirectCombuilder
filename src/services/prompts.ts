@@ -412,6 +412,42 @@ its \`done\` entries and continue with the rest:
   needs: it becomes the pull request description.`;
 }
 
+/**
+ * `seed-plan`: rebuild the task list from a design doc recovered from the
+ * work item, when the worktree that held the original task list is gone.
+ */
+export function buildSeedTaskListPrompt(
+  paths: PhasePaths,
+  bankingWorktree: string,
+  setupFilesWorktree: string,
+): string {
+  return `A finished plan for a new Continia Banking bank communication was recovered, but its
+task list was lost. Rebuild only the task list.
+${SUBAGENT_SECTION}
+## Inputs
+
+- design doc: \`${paths.designDocPath}\` — the approved plan. Do not change it.
+- continia-banking: \`${bankingWorktree}\`
+- setup-files: \`${setupFilesWorktree}\`
+
+Both repositories are on the work item's branch, which may already hold part of the build.
+Leave that work alone: the implement phase decides what is already done.
+
+## What to do
+
+Run **Phase 8 only** of the **bank-integration-planner** skill: invoke the
+**spec-to-tasklist** skill on the design doc, following everything Phase 8 says (one task
+per AL object and one per pseudo-test in the Test Plan section, setup-files tasks in
+their own wave with \`repo: "setup-files"\`). Write the JSON to \`${paths.taskListPath}\`.
+
+- Use the object IDs the design doc already lists. Do not reserve new IDs through the Ninja
+  MCP; an object the design doc lists without an ID keeps no ID in its task, and the
+  implement phase reserves it.
+- Plan only: do not write AL code, edit setup JSON, commit or push.
+
+Reply with one line: the task count, the wave count and the task list path.`;
+}
+
 /** Resume an implement session that stopped with tasks still unreported. */
 export function buildImplementNudge(paths: PhasePaths, remaining: Array<number | string>): string {
   return `You stopped before finishing: these task ids from \`${paths.taskListPath}\` are not

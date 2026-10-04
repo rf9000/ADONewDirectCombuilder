@@ -21,6 +21,7 @@ import {
   buildGitAuthArgs,
   uploadAttachment,
   linkAttachmentToWorkItem,
+  downloadAttachment,
 } from '../../src/sdk/azure-devops-client.ts';
 
 const originalFetch = globalThis.fetch;
@@ -572,5 +573,34 @@ describe('git credentials', () => {
     const expected = Buffer.from(':test-pat-token').toString('base64');
     expect(args[0]).toBe('-c');
     expect(args[1]).toBe(`http.extraHeader=Authorization: Basic ${expected}`);
+  });
+});
+
+describe('downloadAttachment', () => {
+  test('fetches the relation URL as-is with the PAT and returns the text', async () => {
+    mockFn = mock(() => Promise.resolve(new Response('# design', { status: 200 })));
+    globalThis.fetch = mockFn as unknown as typeof fetch;
+
+    const text = await downloadAttachment(mockConfig(), 'https://dev.azure.com/o/_apis/wit/attachments/abc', []);
+
+    expect(text).toBe('# design');
+    const [url, init] = mockFn.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://dev.azure.com/o/_apis/wit/attachments/abc');
+    expect((init.headers as Record<string, string>).Authorization).toStartWith('Basic ');
+  });
+
+  test('retries a 5xx and fails fast on a 4xx', async () => {
+    let calls = 0;
+    mockFn = mock(() => {
+      calls++;
+      return Promise.resolve(calls === 1 ? new Response('x', { status: 503 }) : new Response('ok', { status: 200 }));
+    });
+    globalThis.fetch = mockFn as unknown as typeof fetch;
+    expect(await downloadAttachment(mockConfig(), 'https://a/b', [0])).toBe('ok');
+
+    mockFn = mock(() => Promise.resolve(new Response('nope', { status: 404 })));
+    globalThis.fetch = mockFn as unknown as typeof fetch;
+    await expect(downloadAttachment(mockConfig(), 'https://a/b', [0, 0])).rejects.toThrow('404');
+    expect(mockFn).toHaveBeenCalledTimes(1);
   });
 });

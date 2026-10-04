@@ -8,6 +8,7 @@ import { processItem } from '../services/processor.ts';
 import { removeAllWorktrees } from '../services/workspace.ts';
 import { parseExperimentArgs } from './experiment-args.ts';
 import { runExperiment } from '../services/experiment.ts';
+import { seedPlan } from '../services/seed-plan.ts';
 
 const HELP = `
 New Bank Communication Builder
@@ -29,6 +30,9 @@ Commands:
   reset-item <id>      Clear state for one work item so it runs from scratch
   cleanup-worktrees <id>  Remove the worktrees for one work item
   reset-budget <id>    Zero the recorded spend for one work item (JOB_MAX_BUDGET_USD)
+  seed-plan <id>       Rebuild a lost plan from the work item's attached design doc
+                       (one task-list run, ~$15 cap) and set the job to resume at
+                       implement. Re-add the trigger tag afterwards.
   experiment plan <id> Run planning variants locally on frozen input and compare
                        cost and quality (see experiments/README.md). Flags:
                        --variants <file> --only a,b --answers <file>
@@ -170,6 +174,28 @@ switch (command) {
     stateStore.update(itemId, { spentUsd: 0, planningSpentUsd: 0 });
     stateStore.save();
     console.log(`Spend for #${itemId} reset (was $${previous.toFixed(2)})`);
+    break;
+  }
+
+  case 'seed-plan': {
+    const itemId = requireItemId();
+    if (itemId === undefined) break;
+    const config = loadConfig();
+    const stateStore = new StateStore(config.stateDir);
+    try {
+      const result = await seedPlan(config, itemId, stateStore);
+      console.log(
+        `Seeded #${itemId}: ${result.taskCount} task(s) for $${result.costUsd.toFixed(2)} on ` +
+          `branch ${result.branch} (continued from the existing branch in: ` +
+          `${result.resumedFromBranch.join(', ') || 'none'}).`,
+      );
+      console.log(
+        'Abandon any open pull request from this branch, then re-add the trigger tag to implement.',
+      );
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
     break;
   }
 

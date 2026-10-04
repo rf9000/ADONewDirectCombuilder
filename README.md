@@ -170,6 +170,7 @@ depend on MCP — they go through the Azure DevOps REST client in `src/sdk/`.
 | `reset-state` / `reset-item <id>` | Forget job state so an item runs from scratch |
 | `cleanup-worktrees <id>` | Remove leftover worktrees for a work item |
 | `reset-budget <id>` | Zero a work item's recorded spend (job and planning) so it can run again after hitting `JOB_MAX_BUDGET_USD`, `PLANNING_MAX_BUDGET_USD` or `IMPLEMENT_MIN_BUDGET_USD` |
+| `seed-plan <id>` | Rebuild a lost plan from the work item's attached `<id>-design-doc.md`: worktrees on the existing branch, one task-list run (~$15 cap), job set to resume at implement. Abandon open PRs from the branch, then re-add the trigger tag |
 | `experiment plan <id>` | Run planning variants locally on frozen input and compare cost and quality; see `experiments/README.md` |
 
 Add `--dry-run` to `run-once` / `run-item` to read the work item and its comments and stop

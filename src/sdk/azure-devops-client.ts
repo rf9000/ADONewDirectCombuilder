@@ -366,6 +366,34 @@ export async function uploadAttachment(
 }
 
 /**
+ * Download an attachment by the absolute URL a work item relation carries.
+ * Retried like every other call: 5xx and network errors only.
+ */
+export async function downloadAttachment(
+  config: AppConfig,
+  url: string,
+  retryDelays: number[] = DEFAULT_RETRY_DELAYS,
+): Promise<string> {
+  const authHeader = 'Basic ' + Buffer.from(':' + config.pat).toString('base64');
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url, { headers: { Authorization: authHeader } });
+      if (!res.ok) {
+        throw new AzureDevOpsError(
+          `Azure DevOps attachment download failed ${res.status}: ${await res.text()}`,
+          res.status,
+        );
+      }
+      return await res.text();
+    } catch (err) {
+      const retryable = !(err instanceof AzureDevOpsError) || err.statusCode >= 500;
+      if (!retryable || attempt >= retryDelays.length) throw err;
+      await new Promise((r) => setTimeout(r, retryDelays[attempt]));
+    }
+  }
+}
+
+/**
  * Link an uploaded attachment to a work item.
  *
  * `op: 'add'` on `/relations/-` appends to an array — real JSON Patch

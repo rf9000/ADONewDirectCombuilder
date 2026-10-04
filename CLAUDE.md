@@ -90,6 +90,8 @@ docker-compose.
 - `bun run start` — start the watcher
 - `bun run once` — single poll cycle
 - `bun run status` — show tracked jobs and their phases
+- `bun run src/cli/index.ts seed-plan <id>` — resume a finished/lost job at implement from its
+  attached design doc (rebuilds only the task list)
 - `bun run experiment plan <id>` — local A/B of planning variants (see `experiments/README.md`)
 
 ## File Layout

@@ -255,6 +255,20 @@ export async function removeWorktree(
 }
 
 /** Remove every worktree for a work item, including the parent directory. */
+/** Whether `branch` exists on the remote, after refreshing the repo cache. */
+export async function remoteBranchExists(
+  config: AppConfig,
+  repo: RepoTarget,
+  branch: string,
+): Promise<boolean> {
+  const mirror = await ensureRepoCache(config, repo);
+  const result = await git(config, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`], {
+    cwd: mirror,
+    allowFailure: true,
+  });
+  return result.stdout.trim() !== '';
+}
+
 export async function removeAllWorktrees(
   config: AppConfig,
   itemId: number,

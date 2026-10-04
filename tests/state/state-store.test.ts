@@ -19,6 +19,32 @@ function readState(): JobState {
   return JSON.parse(readFileSync(join(dir, 'jobs.json'), 'utf-8')) as JobState;
 }
 
+describe('StateStore.reload', () => {
+  test('picks up an edit another process saved, such as a CLI reset-budget', async () => {
+    const watcher = new StateStore(dir);
+    watcher.update(42, { spentUsd: 98 });
+    watcher.save();
+
+    await Bun.sleep(20); // mtime resolution
+    const cli = new StateStore(dir);
+    cli.update(42, { spentUsd: 0 });
+    cli.save();
+
+    watcher.reload();
+    expect(watcher.get(42)?.spentUsd).toBe(0);
+  });
+
+  test('keeps unsaved in-memory changes when nobody else wrote the file', () => {
+    const store = new StateStore(dir);
+    store.update(42, { spentUsd: 5 });
+    store.save();
+    store.update(42, { spentUsd: 7 });
+
+    store.reload();
+    expect(store.get(42)?.spentUsd).toBe(7);
+  });
+});
+
 describe('StateStore', () => {
   test('starts empty when no file exists', () => {
     const store = new StateStore(dir);

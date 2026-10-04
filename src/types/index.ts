@@ -87,6 +87,8 @@ export interface WorkItemResponse {
   fields: Record<string, unknown>;
   rev: number;
   url: string;
+  /** Links and attachments; present when fetched with `$expand=all`. */
+  relations?: Array<{ rel: string; url: string; attributes?: { name?: string } }>;
 }
 
 /** Response shape from a WIQL query. */
