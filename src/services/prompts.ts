@@ -151,6 +151,7 @@ export function buildPlanningPrompt(
 
 ${context}
 ${followUp}
+${SUBAGENT_SECTION}
 ${lsp ? AL_LSP_SECTION : ''}
 ## Repositories available to you
 
@@ -219,6 +220,28 @@ is complete or waiting on answers.`;
  * 2026-10-01 spike: the server needs a moment to index, and calls made
  * through an interface resolve to the interface member, not the codeunit.
  */
+/**
+ * Headless, the Agent tool launches subagents in the background by default,
+ * and the session can end while one is still running — its work is lost.
+ * #83634 lost its test planner that way (a $18 nudge redid it) and its
+ * round-3 assembler. The nudge that dispatched with run_in_background:false
+ * lost nothing, so every agent prompt that may dispatch subagents carries this.
+ */
+export const SUBAGENT_SECTION = `
+## Subagents: foreground only
+
+This session runs unattended. A subagent running in the background when your turn ends
+is killed and its work is lost, and nobody is there to wake you when it finishes.
+
+- Always pass \`run_in_background: false\` to the \`Agent\` tool.
+- For parallel work, put several \`Agent\` calls in **one** message: they run concurrently
+  and you get every result back before you continue.
+- Do not continue a finished subagent with \`SendMessage\`; dispatch a new foreground
+  \`Agent\` and point it at the earlier agent's output files instead.
+- Never end your turn to wait for a subagent, and do not use \`ScheduleWakeup\`, cron or
+  other wake-up tools.
+`;
+
 const AL_LSP_SECTION = `
 ## AL language server
 
@@ -319,6 +342,7 @@ export function buildImplementPrompt(
   return `You are implementing an approved bank integration plan for Continia Banking.
 
 ${context}
+${SUBAGENT_SECTION}
 
 ## The plan
 

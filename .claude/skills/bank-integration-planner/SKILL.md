@@ -69,6 +69,8 @@ Two repos, two pull requests, one machine-readable questions file.
 
 Orchestration uses the `Agent` tool with `subagent_type: "general-purpose"`, dispatched in parallel (same pattern as the `code-review` skill). This repo does not use the `Workflow` tool.
 
+**Dispatch every subagent in the foreground** (`run_in_background: false`), and get parallelism by putting several `Agent` calls in one message. When this skill runs unattended, a background subagent still running when the orchestrator ends its turn is killed and its work is lost: one run lost its whole test planner that way. Never end a turn to "wait" for a subagent, and dispatch a new foreground agent (pointed at the earlier output files) rather than continuing a finished one with `SendMessage`.
+
 ## Non-negotiable rules
 
 1. **Plan only — never write AL.** No codeunits, pages, or enum edits are created by this skill. The output is documents. (Builder agents created later by `spec-to-tasklist` consumers do the writing.)

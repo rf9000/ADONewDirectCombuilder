@@ -209,13 +209,24 @@ describe('tailLog', () => {
 });
 
 describe('buildChildEnv', () => {
-  test('returns undefined when nothing overrides the environment', () => {
-    expect(buildChildEnv({})).toBeUndefined();
+  test('always turns background tasks off, on top of our own environment', () => {
+    const env = buildChildEnv({});
+    expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
+    expect(env.PATH).toBe(process.env.PATH);
   });
 
   test('adds CLAUDE_CODE_SUBAGENT_MODEL on top of the given env', () => {
     const env = buildChildEnv({ env: { PATH: '/bin' }, subagentModel: 'claude-haiku-4-5-20251001' });
-    expect(env).toEqual({ PATH: '/bin', CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001' });
+    expect(env).toEqual({
+      PATH: '/bin',
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001',
+    });
+  });
+
+  test('an experiment env cannot turn background tasks back on', () => {
+    const env = buildChildEnv({ env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' } });
+    expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
   });
 
   test('spreads process.env when only the subagent model is set', () => {
@@ -305,7 +316,11 @@ describe('runAgent with an injected query', () => {
     const options = seen.params.options;
     expect(options.model).toBe('claude-sonnet-5-5');
     expect(options.effort).toBe('low');
-    expect(options.env).toEqual({ PATH: '/bin', CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001' });
+    expect(options.env).toEqual({
+      PATH: '/bin',
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001',
+    });
     expect(options.allowedTools).toEqual(['Read']);
     expect(options.mcpServers).toBeUndefined();
   });
@@ -317,7 +332,9 @@ describe('runAgent with an injected query', () => {
     const options = seen.params.options;
     expect(options.model).toBe(config.claudeModel);
     expect(options.effort).toBeUndefined();
-    expect(options.env).toBeUndefined();
+    // Production still overrides one thing: background tasks are always off.
+    expect(options.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
+    expect(options.env.PATH).toBe(process.env.PATH);
   });
 
   test('takes modelUsage from the last result instead of summing', async () => {

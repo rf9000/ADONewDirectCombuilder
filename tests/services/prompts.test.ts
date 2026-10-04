@@ -317,6 +317,22 @@ describe('revision mode prompt', () => {
   });
 });
 
+describe('foreground subagents', () => {
+  test('planning and implement prompts require foreground subagents', () => {
+    const plan = buildPlanningPrompt(mockConfig(), 'ctx', TEST_PATHS, '/b', '/s');
+    const implement = buildImplementPrompt(mockConfig(), 'ctx', TEST_PATHS, '/b', '/s');
+    for (const prompt of [plan, implement]) {
+      expect(prompt).toContain('run_in_background: false');
+      expect(prompt).toContain('Never end your turn to wait for a subagent');
+    }
+  });
+
+  test('a revision round carries the rule too', () => {
+    const prompt = buildPlanningPrompt(mockConfig(), 'ctx', TEST_PATHS, '/b', '/s', { blocking: [], ambiguities: [{ question: 'Format?' }] }, 'revision');
+    expect(prompt).toContain('run_in_background: false');
+  });
+});
+
 describe('planning prompt question rules', () => {
   test('keeps internal design out of the human questions and caps ambiguities', () => {
     const prompt = buildPlanningPrompt(mockConfig(), 'ctx', TEST_PATHS, '/b', '/s');

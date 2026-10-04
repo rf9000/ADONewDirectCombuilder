@@ -62,6 +62,10 @@ docker-compose.
 - **Revision mode** — a follow-up round whose worktree holds a design doc revises that plan (the
   skill's "Follow-up round (revision mode)") instead of re-running Phases 0–9; `artifacts.json`
   records `revisionMode`
+- **Foreground subagents** — `buildChildEnv` always sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, and
+  the planning/implement prompts say so too. Background subagents (the SDK default) died with the
+  session when the orchestrator ended its turn "waiting"; foreground `Agent` calls in one message
+  still run in parallel (checked 2026-10-04)
 - **Serialized jobs** — one at a time; BC cannot run concurrent test jobs on one environment
 - **Tag-swap handshake** — the bot swaps the trigger tag for a waiting tag when it needs answers;
   re-adding the trigger tag resumes the job. Blocking questions pause up to `MAX_CLARIFY_ROUNDS`;

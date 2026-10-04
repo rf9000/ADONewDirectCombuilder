@@ -146,15 +146,22 @@ export function withMcpTools(
 }
 
 /**
- * Environment for the Claude Code child process, or undefined to let the SDK
- * inherit ours. The SDK's `env` option replaces the environment rather than
- * merging, so an override must carry everything else along with it.
+ * Environment for the Claude Code child process. The SDK's `env` option
+ * replaces the environment rather than merging, so it carries everything else
+ * along with the overrides.
+ *
+ * Background tasks are always off. Subagents run in the background by default,
+ * and an unattended session can end while one is still running, losing its
+ * work: #83634 lost its test planner and an assembler that way. Off, every
+ * Agent call blocks until the subagent reports back.
  */
 export function buildChildEnv(
   options: Pick<AgentRunOptions, 'env' | 'subagentModel'>,
-): Record<string, string | undefined> | undefined {
-  if (!options.env && !options.subagentModel) return undefined;
-  const env = { ...(options.env ?? process.env) };
+): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    ...(options.env ?? process.env),
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+  };
   if (options.subagentModel) env.CLAUDE_CODE_SUBAGENT_MODEL = options.subagentModel;
   return env;
 }
@@ -231,7 +238,7 @@ export async function runAgent(
         model: options.model ?? config.claudeModel,
         ...(options.resumeSessionId ? { resume: options.resumeSessionId } : {}),
         ...(options.effort ? { effort: options.effort } : {}),
-        ...(env ? { env } : {}),
+        env,
         cwd: options.cwd,
         additionalDirectories: options.additionalDirectories,
         settingSources: ['project'],
