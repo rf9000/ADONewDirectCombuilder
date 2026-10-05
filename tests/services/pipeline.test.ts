@@ -134,6 +134,7 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
         pullRequestId: repo.key === 'banking' ? 100 : 200,
         url: `https://ado/${repo.key}/pullrequest/1`,
         isDraft: true,
+        artifactId: `vstfs:///Git/PullRequestId/proj%2F${repo.key}%2F1`,
       }),
     ),
     createWorktree: mock((_cfg, repo, _branch, itemId) => {
@@ -244,6 +245,7 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
     tailLog: () => '(log)',
     uploadAttachment: mock(async () => ({ id: 'att-1', url: 'https://example/att-1' })),
     linkAttachmentToWorkItem: mock(async () => undefined),
+    linkPullRequestToWorkItem: mock(async () => mockWorkItem()),
   } as unknown as PipelineDeps;
 }
 
@@ -1204,6 +1206,27 @@ describe('runJob — design doc attachment', () => {
     const fileName = (deps.uploadAttachment as ReturnType<typeof mock>).mock.calls[0]?.[1];
     expect(fileName).toContain('design-doc');
     expect(deps.linkAttachmentToWorkItem).toHaveBeenCalled();
+  });
+
+  test('links every PR to the work item, not just mentions it', async () => {
+    const deps = makeDeps();
+    await runProcessItemAtPhase('publishing', deps);
+
+    const calls = (deps.linkPullRequestToWorkItem as ReturnType<typeof mock>).mock.calls;
+    expect(calls.map((c) => [c[1], c[2]])).toEqual([
+      [42, 'vstfs:///Git/PullRequestId/proj%2Fbanking%2F1'],
+      [42, 'vstfs:///Git/PullRequestId/proj%2FsetupFiles%2F1'],
+    ]);
+  });
+
+  test('a link failure does not fail a job whose PRs exist', async () => {
+    const deps = makeDeps();
+    deps.linkPullRequestToWorkItem = mock(async () => {
+      throw new Error('patch exploded');
+    });
+    const result = await runProcessItemAtPhase('publishing', deps);
+    expect(result.phase).toBe('done');
+    expect(deps.createPullRequest).toHaveBeenCalledTimes(2);
   });
 
   test('an attachment failure does not fail a job whose PRs exist', async () => {

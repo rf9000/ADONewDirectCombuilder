@@ -280,9 +280,10 @@ export interface CreatePullRequestOptions {
 
 interface PullRequestResponse {
   pullRequestId: number;
-  repository?: { webUrl?: string; name?: string };
+  repository?: { id?: string; webUrl?: string; name?: string; project?: { id?: string } };
   isDraft?: boolean;
   url?: string;
+  artifactId?: string;
 }
 
 export async function createPullRequest(
@@ -316,13 +317,45 @@ export async function createPullRequest(
     pr.repository?.webUrl ??
     `${config.orgUrl}/${encodeURIComponent(config.project)}/_git/${encodeURIComponent(repo.name)}`;
 
+  const projectId = pr.repository?.project?.id;
+  const artifactId =
+    pr.artifactId ??
+    (projectId
+      ? `vstfs:///Git/PullRequestId/${projectId}%2F${pr.repository?.id ?? repo.id}%2F${pr.pullRequestId}`
+      : undefined);
+
   return {
     repoKey: repo.key,
     repoName: repo.name,
     pullRequestId: pr.pullRequestId,
     url: `${webUrl}/pullrequest/${pr.pullRequestId}`,
     isDraft: pr.isDraft ?? options.isDraft,
+    artifactId,
   };
+}
+
+/**
+ * Link a pull request to a work item, so it shows under the work item's
+ * Development section. `workItemRefs` on PR creation alone did not create the
+ * link: #83634's PRs only mentioned the work item in their description.
+ */
+export async function linkPullRequestToWorkItem(
+  config: AppConfig,
+  workItemId: number,
+  artifactId: string,
+): Promise<WorkItemResponse> {
+  const path = `wit/workitems/${workItemId}?api-version=7.0`;
+  return adoFetchWithRetry<WorkItemResponse>(config, path, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json-patch+json' },
+    body: JSON.stringify([
+      {
+        op: 'add',
+        path: '/relations/-',
+        value: { rel: 'ArtifactLink', url: artifactId, attributes: { name: 'Pull Request' } },
+      },
+    ]),
+  });
 }
 
 /** Credential-free clone URL, safe to persist in .git/config. */

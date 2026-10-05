@@ -22,6 +22,7 @@ import {
   uploadAttachment,
   linkAttachmentToWorkItem,
   downloadAttachment,
+  linkPullRequestToWorkItem,
 } from '../../src/sdk/azure-devops-client.ts';
 
 const originalFetch = globalThis.fetch;
@@ -443,6 +444,46 @@ describe('createBranch', () => {
       oldObjectId: '0000000000000000000000000000000000000000',
       newObjectId: 'tip-sha',
     });
+  });
+});
+
+describe('linkPullRequestToWorkItem', () => {
+  test('adds an ArtifactLink relation pointing at the PR', async () => {
+    setMockFetch(mockWorkItem());
+    const artifact = 'vstfs:///Git/PullRequestId/proj%2Frepo%2F7';
+
+    await linkPullRequestToWorkItem(mockConfig(), 42, artifact);
+
+    const [url, init] = mockFn.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('wit/workitems/42');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body as string)).toEqual([
+      {
+        op: 'add',
+        path: '/relations/-',
+        value: { rel: 'ArtifactLink', url: artifact, attributes: { name: 'Pull Request' } },
+      },
+    ]);
+  });
+});
+
+describe('createPullRequest artifact id', () => {
+  const options = {
+    title: 't', description: 'd', sourceBranch: 'b', targetBranch: 'main', isDraft: true,
+  };
+
+  test('uses the artifactId the API returns', async () => {
+    setMockFetch({ pullRequestId: 7, artifactId: 'vstfs:///Git/PullRequestId/p%2Fr%2F7' });
+    const config = mockConfig();
+    const pr = await createPullRequest(config, config.repos.banking, options);
+    expect(pr.artifactId).toBe('vstfs:///Git/PullRequestId/p%2Fr%2F7');
+  });
+
+  test('builds it from the project and repository ids when absent', async () => {
+    setMockFetch({ pullRequestId: 7, repository: { id: 'repo-guid', project: { id: 'proj-guid' } } });
+    const config = mockConfig();
+    const pr = await createPullRequest(config, config.repos.banking, options);
+    expect(pr.artifactId).toBe('vstfs:///Git/PullRequestId/proj-guid%2Frepo-guid%2F7');
   });
 });
 

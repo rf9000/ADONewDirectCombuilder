@@ -124,6 +124,8 @@ export interface PullRequestRef {
   pullRequestId: number;
   url: string;
   isDraft: boolean;
+  /** `vstfs:///Git/PullRequestId/...` — what a work item ArtifactLink points at. */
+  artifactId?: string;
 }
 
 /** Where a work item's job currently sits in the pipeline. */

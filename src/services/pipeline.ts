@@ -45,6 +45,7 @@ export interface PipelineDeps {
   createPullRequest: typeof ado.createPullRequest;
   uploadAttachment: typeof ado.uploadAttachment;
   linkAttachmentToWorkItem: typeof ado.linkAttachmentToWorkItem;
+  linkPullRequestToWorkItem: typeof ado.linkPullRequestToWorkItem;
   createWorktree: typeof ws.createWorktree;
   removeAllWorktrees: typeof ws.removeAllWorktrees;
   wireSkills: typeof ws.wireSkills;
@@ -64,6 +65,7 @@ export const defaultDeps: PipelineDeps = {
   createPullRequest: ado.createPullRequest,
   uploadAttachment: ado.uploadAttachment,
   linkAttachmentToWorkItem: ado.linkAttachmentToWorkItem,
+  linkPullRequestToWorkItem: ado.linkPullRequestToWorkItem,
   createWorktree: ws.createWorktree,
   removeAllWorktrees: ws.removeAllWorktrees,
   wireSkills: ws.wireSkills,
@@ -668,6 +670,16 @@ export async function runPublishPhase(
     });
     prs.push(pr);
     log(`  Item #${item.id}: ${repo.name} PR !${pr.pullRequestId} — ${pr.url}`);
+
+    // A missing link must not fail a job whose PR exists — a retry would try
+    // to open the PR again — so it is logged instead.
+    if (pr.artifactId) {
+      await deps.linkPullRequestToWorkItem(config, item.id, pr.artifactId).catch((err) => {
+        log(`  Item #${item.id}: could not link PR !${pr.pullRequestId} to the work item — ${err}`);
+      });
+    } else {
+      log(`  Item #${item.id}: PR !${pr.pullRequestId} returned no artifact id — not linked`);
+    }
   }
 
   store.update(item.id, { prs });
