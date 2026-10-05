@@ -649,6 +649,7 @@ export async function runPublishPhase(
       ctx.branch,
       `${title}\n\nWork item #${item.id}`,
       COMMIT_AUTHOR,
+      repo.defaultBranch,
     );
 
     if (!pushed) {
@@ -907,6 +908,7 @@ export async function runJob(
         branch,
         `${prTitle(item)} (tests not passing)\n\nWork item #${item.id}`,
         COMMIT_AUTHOR,
+        config.repos.banking.defaultBranch,
       );
       await deps.commitAndPush(
         config,
@@ -914,6 +916,7 @@ export async function runJob(
         branch,
         `${prTitle(item)} (tests not passing)\n\nWork item #${item.id}`,
         COMMIT_AUTHOR,
+        config.repos.setupFiles.defaultBranch,
       );
       throw new Error(
         `Verification failed, so no pull request was opened. ${verify.summary}` +

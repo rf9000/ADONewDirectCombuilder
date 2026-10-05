@@ -436,29 +436,47 @@ export async function hasChanges(config: AppConfig, worktree: string): Promise<b
 }
 
 /** Stage everything, commit, and push the branch. No-op when nothing changed. */
+/**
+ * Commit any uncommitted work, then push the branch if it holds commits its
+ * base does not. Returns whether the branch differs from `baseBranch` — the
+ * question a pull request needs answered — not whether this call committed.
+ *
+ * A worktree started from an already-pushed branch (a `seed-plan` resume) can
+ * carry all of a repo's changes in earlier commits. Deciding on uncommitted
+ * changes alone skipped #83634's setup-files PR that way.
+ */
 export async function commitAndPush(
   config: AppConfig,
   worktree: string,
   branch: string,
   message: string,
   author: { name: string; email: string },
+  baseBranch: string,
 ): Promise<boolean> {
-  if (!(await hasChanges(config, worktree))) return false;
+  if (await hasChanges(config, worktree)) {
+    await git(config, ['add', '-A'], { cwd: worktree });
+    await git(
+      config,
+      [
+        '-c',
+        `user.name=${author.name}`,
+        '-c',
+        `user.email=${author.email}`,
+        'commit',
+        '-m',
+        message,
+      ],
+      { cwd: worktree },
+    );
+  }
 
-  await git(config, ['add', '-A'], { cwd: worktree });
-  await git(
+  const ahead = await git(
     config,
-    [
-      '-c',
-      `user.name=${author.name}`,
-      '-c',
-      `user.email=${author.email}`,
-      'commit',
-      '-m',
-      message,
-    ],
+    ['rev-list', '--count', `refs/remotes/origin/${baseBranch}..HEAD`],
     { cwd: worktree },
   );
+  if (Number(ahead.stdout.trim()) === 0) return false;
+
   // Explicit refspec rather than `--set-upstream <branch>`: it pushes exactly
   // one ref and does not depend on the bare clone's remote configuration.
   await git(config, ['push', 'origin', `HEAD:refs/heads/${branch}`], {

@@ -21,6 +21,7 @@ import {
   ensureRepoCache,
   resolveSeedRepo,
   revParse,
+  commitAndPush,
   run as runCommand,
   ensureFetchRefspec,
 } from '../../src/services/workspace.ts';
@@ -441,5 +442,54 @@ describe('ensureFetchRefspec', () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
+  });
+});
+
+describe('commitAndPush', () => {
+  const author = { name: 't', email: 't@t' };
+  let root: string;
+  let clone: string;
+  let bare: string;
+  const sh = async (cwd: string, ...args: string[]) => {
+    const { spawnSync } = await import('child_process');
+    const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf-8' });
+    if (r.status !== 0) throw new Error(r.stderr);
+    return r.stdout.trim();
+  };
+
+  beforeEach(async () => {
+    root = mkdtempSync(join(tmpdir(), 'commit-push-'));
+    bare = join(root, 'remote.git');
+    clone = join(root, 'clone');
+    await sh(root, 'init', '-q', '--bare', '-b', 'main', bare);
+    await sh(root, 'clone', '-q', bare, clone);
+    await sh(clone, 'checkout', '-q', '-b', 'main');
+    await sh(clone, 'commit', '-q', '--allow-empty', '-m', 'base');
+    await sh(clone, 'push', '-q', 'origin', 'main');
+    await sh(clone, 'fetch', '-q', 'origin');
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  });
+
+  test('a clean branch level with its base pushes nothing', async () => {
+    expect(await commitAndPush(mockConfig(), clone, 'feature', 'm', author, 'main')).toBe(false);
+    expect(await sh(bare, 'branch', '--list', 'feature')).toBe('');
+  });
+
+  test('commits and pushes uncommitted work', async () => {
+    writeFileSync(join(clone, 'a.txt'), 'a');
+    expect(await commitAndPush(mockConfig(), clone, 'feature', 'add a', author, 'main')).toBe(true);
+    expect(await sh(bare, 'log', '-1', '--format=%s', 'feature')).toBe('add a');
+  });
+
+  test('a branch whose changes are all in earlier commits still counts (#83634 setup-files)', async () => {
+    writeFileSync(join(clone, 'a.txt'), 'a');
+    await sh(clone, 'add', '-A');
+    await sh(clone, 'commit', '-q', '-m', 'earlier run');
+    // Nothing uncommitted now, as in a worktree seeded from the pushed branch.
+    expect(await commitAndPush(mockConfig(), clone, 'feature', 'm', author, 'main')).toBe(true);
+    expect(await sh(bare, 'log', '-1', '--format=%s', 'feature')).toBe('earlier run');
   });
 });
