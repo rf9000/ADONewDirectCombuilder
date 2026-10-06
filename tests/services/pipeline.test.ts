@@ -21,6 +21,7 @@ import {
   type PhaseContext,
 } from '../../src/services/pipeline.ts';
 import { BOT_COMMENT_MARKER } from '../../src/services/prompts.ts';
+import { createRunCostLedger, type CostRecord } from '../../src/state/cost-ledger.ts';
 import type { PhasePaths } from '../../src/services/prompts.ts';
 import type {
   AppConfig,
@@ -33,6 +34,8 @@ import type {
 
 let root: string;
 let store: StateStore;
+/** What the fake cost ledger was asked to write, in order. */
+let ledgerLines: CostRecord[];
 
 /** mockWorkItem()'s id — every deterministic worktree/.agent path in this file keys on it. */
 const TEST_ITEM_ID = 42;
@@ -75,6 +78,7 @@ const PASSING_VERIFY: VerifyResult = {
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'pipeline-'));
   store = new StateStore(join(root, 'state'));
+  ledgerLines = [];
 });
 
 afterEach(() => {
@@ -246,6 +250,10 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
     uploadAttachment: mock(async () => ({ id: 'att-1', url: 'https://example/att-1' })),
     linkAttachmentToWorkItem: mock(async () => undefined),
     linkPullRequestToWorkItem: mock(async () => mockWorkItem()),
+    costLedger: (() => {
+      const ledger = createRunCostLedger({ record: (entry) => ledgerLines.push(entry) });
+      return () => ledger;
+    })(),
   } as unknown as PipelineDeps;
 }
 
@@ -1351,6 +1359,58 @@ describe('runJob — dry run', () => {
     expect(deps.runAgent).not.toHaveBeenCalled();
     expect(deps.addWorkItemComment).not.toHaveBeenCalled();
     expect(deps.swapWorkItemTags).not.toHaveBeenCalled();
+  });
+});
+
+describe('runJob — cost ledger', () => {
+  test('records one completed line with the first PR id, title and cumulative spend', async () => {
+    store.update(42, { spentUsd: 7.5 });
+    const deps = makeDeps();
+
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('done');
+    expect(ledgerLines).toHaveLength(1);
+    const line = ledgerLines[0]!;
+    expect(line).toMatchObject({
+      workItemId: 42,
+      outcome: 'completed',
+      title: 'Add Acme Bank communication',
+      prId: 100,
+    });
+    // Cumulative across runs: the earlier 7.5 is still in it.
+    expect(line.costUsd).toBe(store.get(42)!.spentUsd!);
+    expect(line.costUsd).toBeGreaterThanOrEqual(7.5);
+    expect(Number.isNaN(Date.parse(line.at))).toBe(false);
+  });
+
+  test('records paused when the job stops for answers', async () => {
+    const deps = makeDeps({ questions: OPEN_PLAN });
+
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('awaiting-answers');
+    expect(ledgerLines.map((l) => l.outcome)).toEqual(['paused']);
+    expect(ledgerLines[0]!.prId).toBeUndefined();
+  });
+
+  test('records failed once when a phase fails', async () => {
+    store.update(42, { spentUsd: 3 });
+    const deps = makeDeps({ failPhase: 'implement' });
+
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('failed');
+    expect(ledgerLines).toHaveLength(1);
+    expect(ledgerLines[0]).toMatchObject({ workItemId: 42, outcome: 'failed' });
+    expect(ledgerLines[0]!.costUsd).toBe(store.get(42)!.spentUsd!);
+    expect(ledgerLines[0]!.prId).toBeUndefined();
+  });
+
+  test('writes nothing in a dry run', async () => {
+    const deps = makeDeps();
+    await runJob(config({ dryRun: true }), mockWorkItem(), store, deps);
+    expect(ledgerLines).toEqual([]);
   });
 });
 

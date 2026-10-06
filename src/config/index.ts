@@ -92,6 +92,8 @@ const envSchema = z.object({
   WORKTREE_ROOT: z.string().default("/data/worktrees"),
   LOG_DIR: z.string().default("/data/logs"),
   STATE_DIR: z.string().default("/data/state"),
+  // JSONL spend ledger shared with the sibling agents; empty = ${STATE_DIR}/cost-ledger.jsonl.
+  COST_LOG_PATH: z.string().default(""),
   SKILLS_SOURCE_DIR: z.string().default("/app/.claude"),
 
   // --- Continia CLI ---
@@ -200,6 +202,7 @@ export function loadConfig(
     worktreeRoot: parsed.WORKTREE_ROOT,
     logDir: parsed.LOG_DIR,
     stateDir: parsed.STATE_DIR,
+    costLogPath: parsed.COST_LOG_PATH.trim() || `${parsed.STATE_DIR}/cost-ledger.jsonl`,
     skillsSourceDir: parsed.SKILLS_SOURCE_DIR,
 
     continiaCliPath: parsed.CONTINIA_CLI_PATH,

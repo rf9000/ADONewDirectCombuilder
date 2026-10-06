@@ -17,6 +17,8 @@ import type {
   WorkItemResponse,
 } from '../types/index.ts';
 import type { StateStore } from '../state/state-store.ts';
+import { costLedgerFor, costRecordFor } from '../state/cost-ledger.ts';
+import type { CostRecord, RunCostLedger } from '../state/cost-ledger.ts';
 import * as ado from '../sdk/azure-devops-client.ts';
 import * as ws from './workspace.ts';
 import * as runner from './agent-runner.ts';
@@ -56,6 +58,8 @@ export interface PipelineDeps {
   runAgent: typeof runner.runAgent;
   readJsonArtifact: typeof runner.readJsonArtifact;
   tailLog: typeof runner.tailLog;
+  /** Spend ledger for this config; one record per run (completed, failed or paused). */
+  costLedger: (config: AppConfig) => RunCostLedger;
 }
 
 export const defaultDeps: PipelineDeps = {
@@ -76,6 +80,7 @@ export const defaultDeps: PipelineDeps = {
   runAgent: runner.runAgent,
   readJsonArtifact: runner.readJsonArtifact,
   tailLog: runner.tailLog,
+  costLedger: costLedgerFor,
 };
 
 function log(message: string): void {
@@ -760,6 +765,12 @@ export async function runJob(
     return { itemId: item.id, processed: true, phase: job.phase };
   }
 
+  // One ledger line per run, carrying the job's cumulative spend at the time.
+  // Best-effort by construction: the ledger swallows its own write errors.
+  const recordRunCost = deps.costLedger(config).beginRun(item.id);
+  const recordCost = (outcome: CostRecord['outcome'], prId?: number) =>
+    recordRunCost(costRecordFor(store, item, outcome, prId));
+
   let ctx: PhaseContext | undefined;
 
   try {
@@ -866,6 +877,7 @@ export async function runJob(
 
       if (shouldPauseForAnswers(config, questions, ctx.job.clarifyRounds)) {
         await runAwaitingAnswersPhase(ctx, questions);
+        recordCost('paused');
         return { itemId: item.id, processed: true, phase: 'awaiting-answers' };
       }
 
@@ -991,6 +1003,7 @@ export async function runJob(
     store.save();
 
     log(`  Item #${item.id}: done — ${prs.length} draft PR(s)`);
+    recordCost('completed', prs[0]?.pullRequestId);
     return { itemId: item.id, processed: true, phase: 'done' };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1006,6 +1019,7 @@ export async function runJob(
       error: message,
     });
     store.save();
+    recordCost('failed');
 
     await reportFailure(config, item, message, deps, store).catch((reportErr) => {
       log(`  Item #${item.id}: could not report failure — ${reportErr}`);

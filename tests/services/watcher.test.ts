@@ -7,13 +7,16 @@ import type { AppConfig, ItemProcessResult } from '../../src/types/index.ts';
 import { runPollCycle, JobTimeoutError } from '../../src/services/watcher.ts';
 import type { WatcherDeps } from '../../src/services/watcher.ts';
 import { StateStore } from '../../src/state/state-store.ts';
+import { createRunCostLedger, type CostRecord } from '../../src/state/cost-ledger.ts';
 
 let dir: string;
 let store: StateStore;
+let ledgerLines: CostRecord[];
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'watcher-'));
   store = new StateStore(dir);
+  ledgerLines = [];
 });
 
 afterEach(() => {
@@ -32,6 +35,10 @@ function makeDeps(overrides: Partial<WatcherDeps> = {}): WatcherDeps {
   return {
     fetchItems: mock(() => Promise.resolve([])),
     processItem: mock((_cfg, item) => Promise.resolve(ok(item.id))),
+    costLedger: (() => {
+      const ledger = createRunCostLedger({ record: (entry) => ledgerLines.push(entry) });
+      return () => ledger;
+    })(),
     ...overrides,
   };
 }
@@ -210,6 +217,70 @@ describe('runPollCycle', () => {
     });
 
     await expect(runPollCycle(config(), store, deps)).rejects.toThrow('WIQL exploded');
+  });
+});
+
+describe('runPollCycle — cost ledger', () => {
+  test('a timed-out job is recorded as failed with its spend so far', async () => {
+    store.update(1, { phase: 'implementing', spentUsd: 12.25 });
+    const deps = makeDeps({
+      fetchItems: mock(() =>
+        Promise.resolve([mockWorkItem({ id: 1, fields: { 'System.Title': 'Slow bank' } })]),
+      ),
+      processItem: mock(() => new Promise<ItemProcessResult>(() => undefined)),
+    });
+
+    await runPollCycle(config({ jobTimeoutMinutes: 1 / 60 }), store, deps);
+
+    expect(ledgerLines).toHaveLength(1);
+    expect(ledgerLines[0]).toMatchObject({
+      workItemId: 1,
+      outcome: 'failed',
+      costUsd: 12.25,
+      title: 'Slow bank',
+    });
+  });
+
+  test("the timed-out job's own late record is suppressed, so the failure is written once", async () => {
+    let lateRecord: ((entry: CostRecord) => void) | undefined;
+    const deps = makeDeps({
+      fetchItems: mock(() => Promise.resolve([mockWorkItem({ id: 1 })])),
+      processItem: mock((cfg) => {
+        // What runJob does on entry; the job then hangs past the timeout.
+        lateRecord = deps.costLedger(cfg).beginRun(1);
+        return new Promise<ItemProcessResult>(() => undefined);
+      }),
+    });
+
+    await runPollCycle(config({ jobTimeoutMinutes: 1 / 60 }), store, deps);
+    // The abandoned run finally finishes and tries to record its outcome.
+    lateRecord!({ at: new Date().toISOString(), workItemId: 1, outcome: 'failed', costUsd: 1 });
+
+    expect(ledgerLines.map((l) => l.outcome)).toEqual(['failed']);
+  });
+
+  test('records nothing itself when the job returns normally', async () => {
+    const deps = makeDeps({
+      fetchItems: mock(() => Promise.resolve([mockWorkItem({ id: 1 })])),
+      processItem: mock(() =>
+        Promise.resolve<ItemProcessResult>({ itemId: 1, processed: false, phase: 'failed', error: 'x' }),
+      ),
+    });
+
+    await runPollCycle(config(), store, deps);
+
+    expect(ledgerLines).toEqual([]);
+  });
+
+  test('writes nothing in a dry run', async () => {
+    const deps = makeDeps({
+      fetchItems: mock(() => Promise.resolve([mockWorkItem({ id: 1 })])),
+      processItem: mock(() => Promise.reject(new Error('boom'))),
+    });
+
+    await runPollCycle(config({ dryRun: true }), store, deps);
+
+    expect(ledgerLines).toEqual([]);
   });
 });
 

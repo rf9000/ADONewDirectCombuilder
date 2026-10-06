@@ -68,6 +68,8 @@ export interface AppConfig {
   worktreeRoot: string;
   logDir: string;
   stateDir: string;
+  /** JSONL spend ledger (COST_LOG_PATH, default `${stateDir}/cost-ledger.jsonl`). */
+  costLogPath: string;
   skillsSourceDir: string;
 
   // --- Continia CLI ---

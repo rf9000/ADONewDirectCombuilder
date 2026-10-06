@@ -4,6 +4,8 @@ import type {
   ItemProcessResult,
 } from '../types/index.ts';
 import { StateStore } from '../state/state-store.ts';
+import { costLedgerFor, costRecordFor } from '../state/cost-ledger.ts';
+import type { RunCostLedger } from '../state/cost-ledger.ts';
 import * as sdk from '../sdk/azure-devops-client.ts';
 import * as proc from './processor.ts';
 
@@ -15,6 +17,12 @@ export interface WatcherDeps {
     item: WorkItemResponse,
     store: StateStore,
   ) => Promise<ItemProcessResult>;
+
+  /**
+   * Spend ledger — must be the same instance the pipeline writes to, so a
+   * timed-out run's late record is suppressed (see RunCostLedger).
+   */
+  costLedger: (config: AppConfig) => RunCostLedger;
 }
 
 async function defaultFetchItems(config: AppConfig): Promise<WorkItemResponse[]> {
@@ -26,6 +34,7 @@ async function defaultFetchItems(config: AppConfig): Promise<WorkItemResponse[]>
 const defaultDeps: WatcherDeps = {
   fetchItems: defaultFetchItems,
   processItem: proc.processItem,
+  costLedger: costLedgerFor,
 };
 
 function log(message: string): void {
@@ -118,6 +127,13 @@ export async function runPollCycle(
         failedAtPhase: stateStore.get(item.id)?.phase,
         error: err instanceof Error ? err.message : String(err),
       });
+      // runJob catches its own failures and records them, so reaching here
+      // means a timeout or a throw outside runJob's try — neither has written
+      // a ledger line. recordAbandoned also invalidates the still-running job
+      // so its eventual outcome is not recorded a second time.
+      if (!config.dryRun) {
+        deps.costLedger(config).recordAbandoned(costRecordFor(stateStore, item, 'failed'));
+      }
       errors++;
     }
 
