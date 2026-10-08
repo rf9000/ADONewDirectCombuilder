@@ -20,7 +20,7 @@ import {
   type PipelineDeps,
   type PhaseContext,
 } from '../../src/services/pipeline.ts';
-import { BOT_COMMENT_MARKER } from '../../src/services/prompts.ts';
+import { BOT_COMMENT_MARKER, parsePrMessage } from '../../src/services/prompts.ts';
 import { createRunCostLedger, type CostRecord } from '../../src/state/cost-ledger.ts';
 import type { PhasePaths } from '../../src/services/prompts.ts';
 import type {
@@ -117,6 +117,8 @@ interface FakeOptions {
    * end of the list repeat its last entry. Default: every task done.
    */
   implementReports?: Array<ImplementResult | null>;
+  /** The PR-message run's reply; `null` makes it unusable, forcing the fallback. */
+  prMessage?: { title: string; bullets: string[] } | null;
 }
 
 function makeDeps(fake: FakeOptions = {}): PipelineDeps {
@@ -159,6 +161,26 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
     runAgent: mock((_cfg, prompt: string, options: { cwd: string }) => {
       const isPlan = prompt.includes('bank-integration-planner');
       const isVerify = prompt.includes('Build and test the changes');
+
+      // The publish phase's read-only PR-message run: free here, so the
+      // spend tests keep counting plan + implement + verify only.
+      if (prompt.includes('PR-message writer')) {
+        if (fake.prMessage === null) {
+          return Promise.resolve({ text: 'not json', success: true, costUsd: 0, numTurns: 1 });
+        }
+        const repo = prompt.includes('Setup Files') ? 'setup files' : 'banking';
+        return Promise.resolve({
+          text: JSON.stringify(
+            fake.prMessage ?? {
+              title: `Add Acme Bank communication to ${repo}`,
+              bullets: [`Added Acme ${repo} changes`, 'Added tests for Acme'],
+            },
+          ),
+          success: true,
+          costUsd: 0,
+          numTurns: 2,
+        });
+      }
 
       if (fake.failPhase === 'plan' && isPlan) {
         return Promise.resolve({
@@ -870,7 +892,8 @@ describe('runJob — implement completeness', () => {
     (deps.runAgent as ReturnType<typeof mock>).mock.calls.filter(
       (call) =>
         !String(call[1]).includes('bank-integration-planner') &&
-        !String(call[1]).includes('Build and test the changes'),
+        !String(call[1]).includes('Build and test the changes') &&
+        !String(call[1]).includes('PR-message writer'),
     );
   const summaryPath = () => join(agentDirFor(TEST_ITEM_ID), 'implement', 'summary.json');
 
@@ -945,8 +968,8 @@ describe('runJob — implement completeness', () => {
     expect(deps.runAgent).not.toHaveBeenCalled();
   });
 
-  test('the PR description comes from the report summary', async () => {
-    const deps = makeDeps({ implementText: 'Done. Wrote the report.' });
+  test('without a PR message, the description falls back to the report summary', async () => {
+    const deps = makeDeps({ implementText: 'Done. Wrote the report.', prMessage: null });
     await runJob(config(), mockWorkItem(), store, deps);
     const prCall = (deps.createPullRequest as ReturnType<typeof mock>).mock.calls[0]!;
     expect(String(prCall[2].description)).toContain('- continia-banking: Acme codeunits');
@@ -1184,7 +1207,7 @@ describe('runJob — dispatch', () => {
 
 describe('runJob — change summary hand-off', () => {
   test('publish reads the change summary from the artifact, not an argument', async () => {
-    const deps = makeDeps();
+    const deps = makeDeps({ prMessage: null });
     // seedArtifactsFor pre-writes implement/summary.json and
     // verify/result.json for 'publishing', so resolveEntryPhase lands
     // directly at publish and implement never runs in this process at all.
@@ -1319,7 +1342,7 @@ describe('runPublishPhase — direct', () => {
   }
 
   test('reads the change summary written to summary.json on disk', async () => {
-    const deps = makeDeps();
+    const deps = makeDeps({ prMessage: null });
     const summaryPath = join(root, 'direct', '.agent', 'implement', 'summary.json');
     mkdirSync(join(root, 'direct', '.agent', 'implement'), { recursive: true });
     writeFileSync(
@@ -1336,7 +1359,7 @@ describe('runPublishPhase — direct', () => {
   });
 
   test('falls back to a fixed string when summary.json is missing', async () => {
-    const deps = makeDeps();
+    const deps = makeDeps({ prMessage: null });
     const summaryPath = join(root, 'direct', '.agent', 'implement', 'summary.json');
     // Deliberately not written.
 
@@ -1414,6 +1437,56 @@ describe('runJob — cost ledger', () => {
   });
 });
 
+describe('PR message', () => {
+  test('each repo gets its own title and bullets from its own diff', async () => {
+    const deps = makeDeps();
+    await runJob(config(), mockWorkItem(), store, deps);
+
+    const prCalls = (deps.createPullRequest as ReturnType<typeof mock>).mock.calls;
+    expect(prCalls[0]![2].title).toBe('Add Acme Bank communication to banking');
+    expect(prCalls[0]![2].description).toStartWith('- Added Acme banking changes\n- Added tests for Acme');
+    expect(prCalls[1]![2].title).toBe('Add Acme Bank communication to setup files');
+
+    const messageRuns = (deps.runAgent as ReturnType<typeof mock>).mock.calls.filter((c) =>
+      String(c[1]).includes('PR-message writer'),
+    );
+    expect(messageRuns).toHaveLength(2);
+    // Read-only, against the repo's own worktree and base branch.
+    expect(messageRuns[0]![2].allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+    expect(messageRuns[0]![2].cwd).toEndWith('banking');
+    expect(String(messageRuns[0]![1])).toContain('git diff refs/remotes/origin/main...HEAD');
+  });
+
+  test('an unusable reply falls back to the work item title and implement summary', async () => {
+    const deps = makeDeps({ prMessage: null });
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('done');
+    const prCall = (deps.createPullRequest as ReturnType<typeof mock>).mock.calls[0]!;
+    expect(prCall[2].title).toBe('Add Acme Bank communication');
+    expect(prCall[2].description).toContain('- continia-banking: Acme codeunits');
+  });
+});
+
+describe('parsePrMessage', () => {
+  test('reads the JSON reply and strips stray bullet markers and a trailing period', () => {
+    expect(
+      parsePrMessage('{"title": "Add Ponto bank communication.", "bullets": ["- Added Ponto Auth", " Added tests "]}'),
+    ).toEqual({ title: 'Add Ponto bank communication', bullets: ['Added Ponto Auth', 'Added tests'] });
+  });
+
+  test('tolerates prose around the object', () => {
+    expect(parsePrMessage('Here: {"title":"Add X","bullets":["Added Y"]} done')?.title).toBe('Add X');
+  });
+
+  test('rejects anything without a title and at least one bullet', () => {
+    expect(parsePrMessage('no json')).toBeUndefined();
+    expect(parsePrMessage('{"title":"","bullets":["a"]}')).toBeUndefined();
+    expect(parsePrMessage('{"title":"t","bullets":[]}')).toBeUndefined();
+    expect(parsePrMessage('{"title":"t"}')).toBeUndefined();
+  });
+});
+
 describe('PR content', () => {
   test('prTitle uses the work item title and truncates long ones', () => {
     expect(prTitle(mockWorkItem())).toBe('Add Acme Bank communication');
@@ -1434,7 +1507,10 @@ describe('PR content', () => {
     expect(description).toContain('12 of 12 tests passed');
     expect(description).toContain('https://env.example/1');
     expect(description).toContain('env-1');
-    expect(description).toContain('#42');
+    // House style: no "generated by" attribution line.
+    expect(description).not.toContain('automatically');
+    // A blank line keeps the separator from turning the last bullet into a heading.
+    expect(description).toContain('- added Acme codeunits\n\n---');
   });
 
   test('a long summary is truncated to fit the ADO 4000-character limit', () => {

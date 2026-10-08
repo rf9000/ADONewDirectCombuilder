@@ -628,3 +628,118 @@ export function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+/** Title and bullets for one pull request, in the team's fw-step4-pullRequest shape. */
+export interface PrMessage {
+  title: string;
+  bullets: string[];
+}
+
+/**
+ * The PR-message step: a port of the team's `/FinishWork:fw-step4-pullRequest`
+ * command (Continia Banking `.claude/commands/FinishWork/`), as DevOpsCoder
+ * runs it. It reads one repository's branch diff in a fresh, read-only
+ * session, so the description says what the branch does — not the story of
+ * the plan, the review rounds or the run that produced it.
+ */
+export function buildPrMessagePrompt(args: {
+  repoName: string;
+  worktree: string;
+  baseRef: string;
+  workItemTitle: string;
+  workItemDescription: string;
+}): string {
+  const { repoName, worktree, baseRef, workItemTitle, workItemDescription } = args;
+  return `You are the **PR-message writer** for one pull request in the **${repoName}** repository.
+The work is finished and committed on the branch checked out at \`${worktree}\`. Your only job
+is the pull request's title and description bullets, from the branch's diff against
+\`${baseRef}\`.
+
+This follows the team's \`/FinishWork:fw-step4-pullRequest\` command, and the output must read
+like what that command produces by hand. You are read-only: use \`Read\`, \`Grep\`, \`Glob\` and
+read-only \`Bash\` (git status/diff/log/show, ls, cat). Never edit, commit or push.
+
+## Step 1: Read the diff
+
+\`\`\`bash
+git diff ${baseRef}...HEAD --stat
+git diff ${baseRef}...HEAD
+\`\`\`
+
+Read the whole diff. If it is very large, use \`--stat\` plus targeted
+\`git diff ${baseRef}...HEAD -- <path>\` reads to cover every file. The diff is your **only**
+source of truth: describe what the branch does, not how it came to be.
+
+## Step 2: Group the hunks
+
+Group hunks by the logical change they belong to (one feature, one fix, one refactor), not by
+file and not by commit. Merge trivial follow-on edits into the group they serve. Aim for 2-6
+groups.
+
+## Step 3: Write the title
+
+- 50-70 characters.
+- Starts with an imperative verb: \`Add\`, \`Fix\`, \`Update\`, \`Remove\`, \`Refactor\`, \`Keep\`, \`Show\`, \`Avoid\`.
+- Describes the business outcome, not the mechanics.
+- No trailing period, no \`feat:\`/\`fix:\` prefix, no work item number, no tool or agent name.
+- If the changes serve several unrelated goals, title the dominant one; the others get bullets.
+
+## Step 4: Write the bullets
+
+- 2-6 bullets, one per group from Step 2.
+- Each starts with a past-tense action word: \`Added\`, \`Fixed\`, \`Updated\`, \`Removed\`,
+  \`Refactored\`, \`Replaced\`, \`Moved\`.
+- One line each — a headline, not a paragraph. No second sentence, no "so that" rationale.
+- Specific, in AL/Business Central terms (table, page, codeunit, enum, interface) or, for setup
+  files, the bank, bank system and setup tables involved — with object names where they help.
+- One bullet for tests when the diff adds or changes them.
+- Do not write the leading \`- \`; give the text only.
+- Never list file paths or line numbers; never describe formatting-only churn.
+
+**Never narrate the process:** nothing about planning rounds, answered questions, verifiers,
+reviews, test runs, compile results, or any agent, model or tool. Never include a URL,
+environment name, user name or password. Verification results are added separately.
+
+## Work item (framing only — describe the diff, not this)
+
+**${workItemTitle}**
+
+${workItemDescription.trim() || '_(no description)_'}
+
+## Step 5: Validate, then answer
+
+- [ ] Title is 50-70 characters, imperative, no trailing period, no prefix
+- [ ] 2-6 bullets, one line each, each starting with a past-tense action word
+- [ ] No process narration, file path, URL, environment name, or tool/agent/model name
+- [ ] The bullets cover every group in the diff — nothing omitted, nothing invented
+
+Reply with **only** one JSON object, no prose and no code fences:
+
+{"title": "...", "bullets": ["...", "..."]}`;
+}
+
+/**
+ * Parse the PR-message reply. Returns undefined for anything that is not a
+ * usable title plus bullets, so the caller falls back rather than publishing
+ * a malformed description.
+ */
+export function parsePrMessage(text: string): PrMessage | undefined {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end <= start) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return undefined;
+  }
+  const { title, bullets } = (parsed ?? {}) as { title?: unknown; bullets?: unknown };
+  if (typeof title !== 'string' || title.trim() === '') return undefined;
+  if (!Array.isArray(bullets)) return undefined;
+  const lines = bullets
+    .filter((b): b is string => typeof b === 'string')
+    .map((b) => b.trim().replace(/^-\s+/, ''))
+    .filter((b) => b !== '');
+  if (lines.length === 0) return undefined;
+  return { title: title.trim().replace(/\.$/, ''), bullets: lines };
+}

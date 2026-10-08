@@ -66,6 +66,10 @@ docker-compose.
   the planning/implement prompts say so too. Background subagents (the SDK default) died with the
   session when the orchestrator ended its turn "waiting"; foreground `Agent` calls in one message
   still run in parallel (checked 2026-10-04)
+- **PR text in the team's style** — each repo's PR title and bullets come from a fresh read-only
+  run over that repo's branch diff (`buildPrMessagePrompt`, a port of Continia Banking's
+  `/FinishWork:fw-step4-pullRequest`, as DevOpsCoder does it). Verification follows after `---`;
+  no tool attribution. Falls back to the work item title and implement summary
 - **Serialized jobs** — one at a time; BC cannot run concurrent test jobs on one environment
 - **Tag-swap handshake** — the bot swaps the trigger tag for a waiting tag when it needs answers;
   re-adding the trigger tag resumes the job. Blocking questions pause up to `MAX_CLARIFY_ROUNDS`;
