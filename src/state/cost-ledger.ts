@@ -1,6 +1,6 @@
-import { appendFileSync, mkdirSync } from 'fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'fs';
 import { dirname } from 'path';
-import type { AppConfig, WorkItemResponse } from '../types/index.ts';
+import type { AppConfig, JobPhase, WorkItemResponse } from '../types/index.ts';
 import type { StateStore } from './state-store.ts';
 
 /**
@@ -15,7 +15,11 @@ export interface CostRecord {
   at: string;
   workItemId: number;
   outcome: 'completed' | 'failed' | 'paused';
-  /** The job's cumulative `spentUsd` at that moment — across every run of this work item. */
+  /**
+   * The job's lifetime spend at that moment (`lifetimeSpentUsd`), across every
+   * run of this work item. No reset lowers it, so the monitor can count each
+   * line as what the total grew by.
+   */
   costUsd: number;
   title?: string;
   /** First draft PR id, when one was opened. */
@@ -116,7 +120,11 @@ export function costLedgerFor(config: AppConfig): RunCostLedger {
   return ledger;
 }
 
-/** Build a ledger line from the job's current state; `costUsd` is the cumulative `spentUsd`. */
+/**
+ * Build a ledger line from the job's current state. `costUsd` is the lifetime
+ * spend, which no reset lowers; a job that has not charged anything since it
+ * gained the field falls back to `spentUsd`.
+ */
 export function costRecordFor(
   store: StateStore,
   item: WorkItemResponse,
@@ -124,12 +132,84 @@ export function costRecordFor(
   prId?: number,
 ): CostRecord {
   const title = item.fields['System.Title'];
+  const job = store.get(item.id);
   return {
     at: new Date().toISOString(),
     workItemId: item.id,
     outcome,
-    costUsd: store.get(item.id)?.spentUsd ?? 0,
+    costUsd: job?.lifetimeSpentUsd ?? job?.spentUsd ?? 0,
     ...(typeof title === 'string' && title !== '' ? { title } : {}),
     ...(prId !== undefined ? { prId } : {}),
   };
+}
+
+/** Every well-formed line of the ledger, in file order; a missing or unreadable file gives none. */
+export function readCostLedger(path: string): CostRecord[] {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf-8');
+  } catch {
+    return [];
+  }
+  const records: CostRecord[] = [];
+  for (const raw of text.split('\n')) {
+    if (raw.trim() === '') continue;
+    try {
+      const parsed = JSON.parse(raw) as Partial<CostRecord>;
+      if (typeof parsed.workItemId === 'number' && typeof parsed.costUsd === 'number') {
+        records.push(parsed as CostRecord);
+      }
+    } catch {
+      // A torn last line from a crash mid-append; skip it.
+    }
+  }
+  return records;
+}
+
+/**
+ * The work item's lifetime spend before the next charge.
+ *
+ * A job that has `lifetimeSpentUsd` uses it. Otherwise (a job from before the
+ * field existed, or one cleared by `reset-item`) it starts from the higher of
+ * `spentUsd` and the highest total the ledger already holds for the item, so
+ * the monitor, which counts how far each line's total grew, sees the new
+ * spend instead of a total that dropped below what it saw before.
+ */
+export function lifetimeSpentUsd(store: StateStore, itemId: number, ledgerPath: string): number {
+  const job = store.get(itemId);
+  if (job?.lifetimeSpentUsd !== undefined) return job.lifetimeSpentUsd;
+  const recorded = readCostLedger(ledgerPath)
+    .filter((r) => r.workItemId === itemId)
+    .reduce((max, r) => Math.max(max, r.costUsd), 0);
+  return Math.max(job?.spentUsd ?? 0, recorded);
+}
+
+const BACKFILL_OUTCOMES: Partial<Record<JobPhase, CostRecord['outcome']>> = {
+  done: 'completed',
+  failed: 'failed',
+  'awaiting-answers': 'paused',
+};
+
+/**
+ * Ledger lines for jobs that finished before the ledger existed: one per job
+ * that is done, failed or awaiting answers and has no line yet, stamped with
+ * the job's `updatedAt`. Jobs still in flight are left to record themselves.
+ * The state file holds no title, so these lines have none.
+ */
+export function backfillRecords(store: StateStore, ledgerPath: string): CostRecord[] {
+  const recorded = new Set(readCostLedger(ledgerPath).map((r) => r.workItemId));
+  return store
+    .all()
+    .filter((job) => !recorded.has(job.itemId) && BACKFILL_OUTCOMES[job.phase] !== undefined)
+    .map((job): CostRecord => {
+      const prId = job.prs[0]?.pullRequestId;
+      return {
+        at: job.updatedAt,
+        workItemId: job.itemId,
+        outcome: BACKFILL_OUTCOMES[job.phase]!,
+        costUsd: job.lifetimeSpentUsd ?? job.spentUsd ?? 0,
+        ...(prId !== undefined ? { prId } : {}),
+      };
+    })
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 }

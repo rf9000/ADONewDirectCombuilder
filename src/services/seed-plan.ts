@@ -2,6 +2,7 @@ import { existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { AppConfig, RepoTarget } from '../types/index.ts';
 import type { StateStore } from '../state/state-store.ts';
+import { lifetimeSpentUsd } from '../state/cost-ledger.ts';
 import * as ado from '../sdk/azure-devops-client.ts';
 import * as ws from './workspace.ts';
 import * as prompts from './prompts.ts';
@@ -133,6 +134,8 @@ export async function seedPlan(
     plannerSessionId: job.plannerSessionId ?? result.sessionId ?? 'seed-plan',
     spentUsd: result.costUsd,
     planningSpentUsd: result.costUsd,
+    // The budget starts over; the lifetime total keeps what came before.
+    lifetimeSpentUsd: lifetimeSpentUsd(store, itemId, config.costLogPath) + result.costUsd,
   });
   store.save();
 

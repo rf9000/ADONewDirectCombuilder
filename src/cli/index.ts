@@ -9,6 +9,7 @@ import { removeAllWorktrees } from '../services/workspace.ts';
 import { parseExperimentArgs } from './experiment-args.ts';
 import { runExperiment } from '../services/experiment.ts';
 import { seedPlan } from '../services/seed-plan.ts';
+import { backfillRecords, createCostLedger, lifetimeSpentUsd } from '../state/cost-ledger.ts';
 
 const HELP = `
 New Bank Communication Builder
@@ -29,7 +30,10 @@ Commands:
   reset-state          Clear all job state and exit
   reset-item <id>      Clear state for one work item so it runs from scratch
   cleanup-worktrees <id>  Remove the worktrees for one work item
-  reset-budget <id>    Zero the recorded spend for one work item (JOB_MAX_BUDGET_USD)
+  reset-budget <id>    Zero the recorded spend for one work item (JOB_MAX_BUDGET_USD);
+                       the lifetime total in the cost ledger keeps it
+  backfill-ledger      Write a cost ledger line for each finished job that has none
+                       (jobs from before the ledger existed). --dry-run lists them
   seed-plan <id>       Rebuild a lost plan from the work item's attached design doc
                        (one task-list run, ~$15 cap) and set the job to resume at
                        implement. Re-add the trigger tag afterwards.
@@ -171,9 +175,29 @@ switch (command) {
       break;
     }
     const previous = job.spentUsd ?? 0;
-    stateStore.update(itemId, { spentUsd: 0, planningSpentUsd: 0 });
+    stateStore.update(itemId, {
+      spentUsd: 0,
+      planningSpentUsd: 0,
+      lifetimeSpentUsd: lifetimeSpentUsd(stateStore, itemId, config.costLogPath),
+    });
     stateStore.save();
     console.log(`Spend for #${itemId} reset (was $${previous.toFixed(2)})`);
+    break;
+  }
+
+  case 'backfill-ledger': {
+    const config = loadConfig();
+    const records = backfillRecords(new StateStore(config.stateDir), config.costLogPath);
+    for (const r of records) {
+      console.log(`#${r.workItemId}  ${r.at}  ${r.outcome}  $${r.costUsd.toFixed(2)}`);
+    }
+    if (!dryRun) {
+      const ledger = createCostLedger({ path: config.costLogPath });
+      for (const r of records) ledger.record(r);
+    }
+    console.log(
+      `${records.length} job(s) ${dryRun ? 'would be' : 'were'} added to ${config.costLogPath}`,
+    );
     break;
   }
 

@@ -27,6 +27,7 @@ function config(): AppConfig {
     repoCacheDir: join(root, 'repos'),
     logDir: join(root, 'logs'),
     stateDir: join(root, 'state'),
+    costLogPath: join(root, 'state', 'cost-ledger.jsonl'),
   });
 }
 
@@ -126,6 +127,8 @@ describe('seedPlan', () => {
     expect(job.plannerSessionId).toBe('seed-sess');
     expect(job.spentUsd).toBe(2.5);
     expect(job.planningSpentUsd).toBe(2.5);
+    // The budget starts over, but the lifetime total keeps the earlier spend.
+    expect(job.lifetimeSpentUsd).toBeCloseTo(101.96);
     expect(job.prs).toEqual([]);
 
     // Saved, so a watcher that reloads the file sees it.

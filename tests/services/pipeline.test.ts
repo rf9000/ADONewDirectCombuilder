@@ -94,6 +94,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     repoCacheDir: join(root, 'repos'),
     logDir: join(root, 'logs'),
     stateDir: join(root, 'state'),
+    costLogPath: join(root, 'state', 'cost-ledger.jsonl'),
     skipBuildTest: true,
     ...overrides,
   });
@@ -830,6 +831,24 @@ describe('runJob — spend caps', () => {
     expect(store.get(42)?.spentUsd).toBeCloseTo(1);
   });
 
+  test('keeps a lifetime total that a budget reset does not lower', async () => {
+    // As after `reset-budget`: the budget is back at 0, the lifetime total is not.
+    store.update(42, { spentUsd: 0, lifetimeSpentUsd: 100 });
+    await runJob(config(), mockWorkItem(), store, makeDeps());
+    expect(store.get(42)?.spentUsd).toBeCloseTo(1);
+    expect(store.get(42)?.lifetimeSpentUsd).toBeCloseTo(101);
+  });
+
+  test('starts the lifetime total from the ledger when the job has none', async () => {
+    // As after `reset-item`: no job record, but the ledger already holds $80 for it.
+    writeFileSync(
+      config().costLogPath,
+      `${JSON.stringify({ at: '2026-10-01T00:00:00.000Z', workItemId: 42, outcome: 'failed', costUsd: 80 })}\n`,
+    );
+    await runJob(config(), mockWorkItem(), store, makeDeps());
+    expect(store.get(42)?.lifetimeSpentUsd).toBeCloseTo(81);
+  });
+
   test('records planning spend separately from the job total', async () => {
     await runJob(config(), mockWorkItem(), store, makeDeps());
     expect(store.get(42)?.planningSpentUsd).toBeCloseTo(0.5);
@@ -1402,7 +1421,7 @@ describe('runJob — cost ledger', () => {
       prId: 100,
     });
     // Cumulative across runs: the earlier 7.5 is still in it.
-    expect(line.costUsd).toBe(store.get(42)!.spentUsd!);
+    expect(line.costUsd).toBe(store.get(42)!.lifetimeSpentUsd!);
     expect(line.costUsd).toBeGreaterThanOrEqual(7.5);
     expect(Number.isNaN(Date.parse(line.at))).toBe(false);
   });
@@ -1426,7 +1445,7 @@ describe('runJob — cost ledger', () => {
     expect(result.phase).toBe('failed');
     expect(ledgerLines).toHaveLength(1);
     expect(ledgerLines[0]).toMatchObject({ workItemId: 42, outcome: 'failed' });
-    expect(ledgerLines[0]!.costUsd).toBe(store.get(42)!.spentUsd!);
+    expect(ledgerLines[0]!.costUsd).toBe(store.get(42)!.lifetimeSpentUsd!);
     expect(ledgerLines[0]!.prId).toBeUndefined();
   });
 

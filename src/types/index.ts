@@ -181,6 +181,13 @@ export interface JobRecord {
    * Reset together with `spentUsd`.
    */
   planningSpentUsd?: number;
+  /**
+   * Total USD ever spent on this work item. Unlike `spentUsd` it only grows:
+   * `reset-budget` and `seed-plan` keep it, and it is what the cost ledger
+   * records. Absent on jobs from before it existed and after `reset-item`;
+   * `lifetimeSpentUsd()` then seeds it from `spentUsd` and the ledger.
+   */
+  lifetimeSpentUsd?: number;
   updatedAt: string;
 }
 

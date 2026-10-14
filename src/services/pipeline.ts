@@ -17,7 +17,7 @@ import type {
   WorkItemResponse,
 } from '../types/index.ts';
 import type { StateStore } from '../state/state-store.ts';
-import { costLedgerFor, costRecordFor } from '../state/cost-ledger.ts';
+import { costLedgerFor, costRecordFor, lifetimeSpentUsd } from '../state/cost-ledger.ts';
 import type { CostRecord, RunCostLedger } from '../state/cost-ledger.ts';
 import * as ado from '../sdk/azure-devops-client.ts';
 import * as ws from './workspace.ts';
@@ -247,11 +247,12 @@ async function runPhaseAgent(
   });
 
   const total = spent + result.costUsd;
+  const lifetime = lifetimeSpentUsd(store, item.id, config.costLogPath) + result.costUsd;
   store.update(
     item.id,
     isPlanning
-      ? { spentUsd: total, planningSpentUsd: planningSpent + result.costUsd }
-      : { spentUsd: total },
+      ? { spentUsd: total, lifetimeSpentUsd: lifetime, planningSpentUsd: planningSpent + result.costUsd }
+      : { spentUsd: total, lifetimeSpentUsd: lifetime },
   );
   store.save();
   log(

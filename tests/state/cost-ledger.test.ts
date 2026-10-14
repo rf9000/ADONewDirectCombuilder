@@ -6,10 +6,13 @@ import { mockConfig, mockWorkItem } from '../helpers.ts';
 import { loadConfig } from '../../src/config/index.ts';
 import { StateStore } from '../../src/state/state-store.ts';
 import {
+  backfillRecords,
   costLedgerFor,
   costRecordFor,
   createCostLedger,
   createRunCostLedger,
+  lifetimeSpentUsd,
+  readCostLedger,
   type CostRecord,
 } from '../../src/state/cost-ledger.ts';
 
@@ -121,6 +124,13 @@ describe('costRecordFor', () => {
     expect(Number.isNaN(Date.parse(record.at))).toBe(false);
   });
 
+  test('records the lifetime total, not the budget a reset lowered', () => {
+    const store = new StateStore(dir);
+    store.update(42, { spentUsd: 2, lifetimeSpentUsd: 102 });
+
+    expect(costRecordFor(store, mockWorkItem(), 'completed').costUsd).toBe(102);
+  });
+
   test('defaults spend to 0 and omits absent optional fields', () => {
     const store = new StateStore(dir);
     const record = costRecordFor(store, mockWorkItem({ id: 5, fields: {} }), 'failed');
@@ -163,5 +173,90 @@ describe('cost ledger path', () => {
     stale(line({ outcome: 'completed' }));
 
     expect(readLines(cfg.costLogPath).map((l) => l.outcome)).toEqual(['failed']);
+  });
+});
+
+describe('readCostLedger', () => {
+  test('reads every well-formed line and skips a torn one', () => {
+    const path = join(dir, 'cost-ledger.jsonl');
+    writeFileSync(path, `${JSON.stringify(line())}\n\n{"workItemId":7,"cos\n`);
+
+    expect(readCostLedger(path)).toEqual([line()]);
+  });
+
+  test('a missing file reads as empty', () => {
+    expect(readCostLedger(join(dir, 'none.jsonl'))).toEqual([]);
+  });
+});
+
+describe('lifetimeSpentUsd', () => {
+  test('uses the job lifetime total when it has one', () => {
+    const store = new StateStore(dir);
+    store.update(42, { spentUsd: 1, lifetimeSpentUsd: 50 });
+    const path = join(dir, 'cost-ledger.jsonl');
+    writeFileSync(path, `${JSON.stringify(line({ costUsd: 90 }))}\n`);
+
+    expect(lifetimeSpentUsd(store, 42, path)).toBe(50);
+  });
+
+  test('otherwise starts from the higher of spentUsd and the ledger for that item', () => {
+    const store = new StateStore(dir);
+    const path = join(dir, 'cost-ledger.jsonl');
+    writeFileSync(
+      path,
+      [line({ costUsd: 30 }), line({ costUsd: 80 }), line({ workItemId: 7, costUsd: 500 })]
+        .map((l) => JSON.stringify(l))
+        .join('\n') + '\n',
+    );
+
+    // After reset-item: no job, the ledger's highest total for #42.
+    expect(lifetimeSpentUsd(store, 42, path)).toBe(80);
+    // A job from before the field: its spentUsd, when higher.
+    store.update(42, { spentUsd: 95 });
+    expect(lifetimeSpentUsd(store, 42, path)).toBe(95);
+    expect(lifetimeSpentUsd(store, 9, join(dir, 'none.jsonl'))).toBe(0);
+  });
+});
+
+describe('backfillRecords', () => {
+  test('adds one line per finished job the ledger lacks, oldest first', () => {
+    const store = new StateStore(dir);
+    const path = join(dir, 'cost-ledger.jsonl');
+    writeFileSync(path, `${JSON.stringify(line({ workItemId: 1 }))}\n`);
+    store.update(1, { phase: 'done', spentUsd: 5 }); // already in the ledger
+    store.update(2, { phase: 'implementing', spentUsd: 5 }); // still in flight
+    store.update(3, {
+      phase: 'done',
+      spentUsd: 0,
+      lifetimeSpentUsd: 64.2,
+      prs: [
+        { repoKey: 'banking', repoName: 'b', pullRequestId: 900, url: 'u', isDraft: true },
+      ],
+    });
+    store.update(4, { phase: 'failed', spentUsd: 12.5 });
+    store.update(5, { phase: 'awaiting-answers' });
+    store.save();
+    const jobs = new StateStore(dir);
+    const at = (id: number) => jobs.get(id)!.updatedAt;
+
+    const records = backfillRecords(jobs, path);
+
+    expect(records.map((r) => r.workItemId).sort()).toEqual([3, 4, 5]);
+    expect(records.find((r) => r.workItemId === 3)).toEqual({
+      at: at(3),
+      workItemId: 3,
+      outcome: 'completed',
+      costUsd: 64.2,
+      prId: 900,
+    });
+    expect(records.find((r) => r.workItemId === 4)).toEqual({
+      at: at(4),
+      workItemId: 4,
+      outcome: 'failed',
+      costUsd: 12.5,
+    });
+    expect(records.find((r) => r.workItemId === 5)).toMatchObject({ outcome: 'paused', costUsd: 0 });
+    const ats = records.map((r) => r.at);
+    expect(ats).toEqual([...ats].sort());
   });
 });

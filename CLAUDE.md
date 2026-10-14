@@ -72,7 +72,11 @@ docker-compose.
   no tool attribution. Falls back to the work item title and implement summary
 - **Full-history cost ledger** — each run appends one line to `${STATE_DIR}/cost-ledger.jsonl`
   (`src/state/cost-ledger.ts`, `COST_LOG_PATH` overrides): outcome `completed`/`failed`/`paused`
-  and the job's cumulative `spentUsd`. Append-only, never pruned; the monitor reads it for the
+  and the job's `lifetimeSpentUsd`. That total only grows: `reset-budget` and `seed-plan` reset
+  `spentUsd` (the budget) but keep it, and after `reset-item` it restarts from the ledger's
+  highest line for the item, because the monitor (`ledgerCost: 'item-total'`) counts each line
+  as what the total grew by. `backfill-ledger` adds lines for jobs that finished before the
+  ledger existed. Append-only, never pruned; the monitor reads it for the
   card list and the "Month"/"All time" totals, as for investigate, mutant-fixer and DevOpsCoder.
   Do not swap it for a `processed-items.json`/`processed-prs.json` like docs-writer and
   release-notes: those cover 30 days and carry no full history
