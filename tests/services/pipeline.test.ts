@@ -944,6 +944,18 @@ describe('runJob — implement completeness', () => {
     expect(require('fs').existsSync(summaryPath())).toBe(false);
   });
 
+  test('records tasks done out of the total for the monitor', async () => {
+    const deps = makeDeps({ implementReports: [PARTIAL, DONE_REPORT] });
+    await runJob(config(), mockWorkItem(), store, deps);
+    expect(store.get(42)?.implementProgress).toEqual({ done: 2, total: 2 });
+  });
+
+  test('a build that stops partway keeps its partial count', async () => {
+    const deps = makeDeps({ implementReports: [PARTIAL] });
+    await runJob(config(), mockWorkItem(), store, deps);
+    expect(store.get(42)?.implementProgress).toEqual({ done: 1, total: 2 });
+  });
+
   test('a run that writes no report at all is unfinished', async () => {
     const deps = makeDeps({ implementReports: [null] });
     const result = await runJob(config(), mockWorkItem(), store, deps);

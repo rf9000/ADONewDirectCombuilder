@@ -84,6 +84,17 @@ describe('StateStore', () => {
     expect(second.updatedAt >= first.updatedAt).toBe(true);
   });
 
+  test('update stamps phaseSince on a phase change only', () => {
+    const store = new StateStore(dir);
+    const entered = store.update(42, { phase: 'implementing' });
+    expect(entered.phaseSince).toBe(entered.updatedAt);
+
+    const same = store.update(42, { phase: 'implementing', spentUsd: 3 });
+    const other = store.update(42, { branch: 'b1' });
+    expect(same.phaseSince).toBe(entered.phaseSince);
+    expect(other.phaseSince).toBe(entered.phaseSince);
+  });
+
   test('update cannot change the item id', () => {
     const store = new StateStore(dir);
     const job = store.update(42, { phase: 'planning' } as never);

@@ -113,14 +113,19 @@ export class StateStore {
     return created;
   }
 
-  /** Merge a partial update into a job record and stamp updatedAt. */
+  /**
+   * Merge a partial update into a job record and stamp updatedAt. A patch that
+   * moves the job to another phase also stamps phaseSince.
+   */
   update(itemId: number, patch: Partial<Omit<JobRecord, 'itemId'>>): JobRecord {
     const job = this.ensure(itemId);
+    const now = new Date().toISOString();
     const next: JobRecord = {
       ...job,
       ...patch,
       itemId,
-      updatedAt: new Date().toISOString(),
+      ...(patch.phase !== undefined && patch.phase !== job.phase && { phaseSince: now }),
+      updatedAt: now,
     };
     this.jobs.set(itemId, next);
     return next;

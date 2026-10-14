@@ -188,6 +188,17 @@ export interface JobRecord {
    * `lifetimeSpentUsd()` then seeds it from `spentUsd` and the ledger.
    */
   lifetimeSpentUsd?: number;
+  /**
+   * When the job entered its current phase. Set by `StateStore.update` on a
+   * phase change; `updatedAt` moves on every write, so it cannot tell this.
+   * The monitor's stage timer reads it.
+   */
+  phaseSince?: string;
+  /**
+   * Tasks done out of the task list's total, from `implement/result.json`.
+   * Refreshed while implement runs, for the monitor's Implement chip.
+   */
+  implementProgress?: { done: number; total: number };
   updatedAt: string;
 }
 

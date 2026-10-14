@@ -31,6 +31,8 @@ const MAX_PLANNING_NUDGES = 2;
 
 /** Times an implement session that stopped with tasks unfinished is resumed before it fails. */
 const MAX_IMPLEMENT_NUDGES = 2;
+/** How often the implement report is copied into the job record while the agent runs. */
+const IMPLEMENT_PROGRESS_INTERVAL_MS = 30_000;
 
 /** Artifacts live here inside the banking worktree; git-excluded, never committed. */
 const AGENT_DIR = '.agent';
@@ -498,6 +500,27 @@ export async function runImplementPhase(ctx: PhaseContext): Promise<string> {
     ctx.worktrees.setupFiles,
   );
 
+  // The monitor shows tasks done out of the total on its Implement chip.
+  recordImplementProgress(ctx, taskIds, false);
+  const progressTimer = setInterval(
+    () => recordImplementProgress(ctx, taskIds, true),
+    IMPLEMENT_PROGRESS_INTERVAL_MS,
+  );
+  try {
+    return await runImplementAgent(ctx, taskIds, prompt);
+  } finally {
+    clearInterval(progressTimer);
+    recordImplementProgress(ctx, taskIds, true);
+  }
+}
+
+async function runImplementAgent(
+  ctx: PhaseContext,
+  taskIds: Array<number | string>,
+  prompt: string,
+): Promise<string> {
+  const { config, item, deps, paths } = ctx;
+
   let result = await runPhaseAgent(
     ctx,
     'implementing',
@@ -561,6 +584,31 @@ export async function runImplementPhase(ctx: PhaseContext): Promise<string> {
   writeFileSync(paths.implementSummaryPath, JSON.stringify({ summary }, null, 2), 'utf-8');
 
   return summary;
+}
+
+/**
+ * Copy the count of tasks marked `done` in implement/result.json into the job
+ * record. Mid-run, a report that is missing or half-written keeps the last
+ * count; at the start a missing report means nothing is done yet.
+ */
+function recordImplementProgress(
+  ctx: PhaseContext,
+  taskIds: Array<number | string>,
+  midRun: boolean,
+): void {
+  const { item, store, deps, paths } = ctx;
+  const report = deps.readJsonArtifact<ImplementResult>(paths.implementResultPath);
+  const current = store.get(item.id)?.implementProgress;
+  if (!report && midRun && current) return;
+  const doneIds = new Set(
+    (Array.isArray(report?.tasks) ? report.tasks : [])
+      .filter((t) => t.status === 'done')
+      .map((t) => String(t.id)),
+  );
+  const done = taskIds.filter((id) => doneIds.has(String(id))).length;
+  if (current?.done === done && current.total === taskIds.length) return;
+  store.update(item.id, { implementProgress: { done, total: taskIds.length } });
+  store.save();
 }
 
 /** Task ids from plan/tasklist.json. A list with none cannot show a build finished, so it fails. */
