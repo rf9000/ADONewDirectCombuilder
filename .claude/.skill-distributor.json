@@ -1,0 +1,90 @@
+{
+  "managedBy": "skill-distributor",
+  "items": {
+    "async-flow-patterns": {
+      "kind": "skill",
+      "deployAs": "async-flow-patterns",
+      "hash": "53e9de0afde9786a29852fdbd90ba68b875754c75bd0b62f5021eced9ded9f13"
+    },
+    "bank-communication-operations": {
+      "kind": "skill",
+      "deployAs": "bank-communication-operations",
+      "hash": "17a4f0ae7e4b75fbda1a3ca71f9052a78767c324e3c9185870e639a2fb481c59"
+    },
+    "bank-integration-planner": {
+      "kind": "skill",
+      "deployAs": "bank-integration-planner",
+      "hash": "9711a1f9a23ca09a322beccca79cebaaebdb1741113f896781d9f1c786a5a198"
+    },
+    "bank-system-setup-wizard": {
+      "kind": "skill",
+      "deployAs": "bank-system-setup-wizard",
+      "hash": "9384efc695e4f6a6f862f1b5272511d773fedcaea6e6bdb4293ffbc21e3a714f"
+    },
+    "code-review": {
+      "kind": "skill",
+      "deployAs": "code-review",
+      "hash": "b42472bf77f7a3f1406f10d0e25c4ff782ca6b154558602474324df2a243d3ea"
+    },
+    "continia-deploy": {
+      "kind": "skill",
+      "deployAs": "continia-deploy",
+      "hash": "39da1d35c1f89bb5d0ba0ae210521e274493e61f5b2bec01d427da5f18bcc5f3"
+    },
+    "continia-deps": {
+      "kind": "skill",
+      "deployAs": "continia-deps",
+      "hash": "6b0516f37a42c6948d4a4b3943af865e9be8cb88d5ba208bfdfc2c6143dbb70b"
+    },
+    "continia-env-setup": {
+      "kind": "skill",
+      "deployAs": "continia-env-setup",
+      "hash": "e05c7b69a29034d72bafbaf4a5552f7e900116348023f60ed68328fa238371f0"
+    },
+    "continia-test": {
+      "kind": "skill",
+      "deployAs": "continia-test",
+      "hash": "c3a1fb3bf3952caeba1260ff4ebf38919817b2b907ba3bbd99bde3eb2b66e951"
+    },
+    "do-process-item": {
+      "kind": "command",
+      "deployAs": "do-process-item",
+      "hash": "6c0f940ec5d8f780216940f81eff577f68544f4581d8543f22263632c1fde504"
+    },
+    "fw-create-pr": {
+      "kind": "command",
+      "deployAs": "fw-create-pr",
+      "hash": "6c0f334bb09f2dc05891f74a9f6fd6d4e89e55881e944cfb3d236092de466001"
+    },
+    "new-bank-communication": {
+      "kind": "skill",
+      "deployAs": "new-bank-communication",
+      "hash": "13a4c13a777913047f23b836387a762b540a024a93a0cd95bee783636aef7473"
+    },
+    "online-investigate": {
+      "kind": "skill",
+      "deployAs": "online-investigate",
+      "hash": "bfb2a43651eeb89f25759b165dca9ec4770b6fe0c22e149523a97c7b131695a2"
+    },
+    "requirement-to-spec": {
+      "kind": "skill",
+      "deployAs": "requirement-to-spec",
+      "hash": "023cf58937fa64ae429839acf692774c6dc9c0b2d41a543a28aa6ce1319abeb6"
+    },
+    "setup-files-investigate": {
+      "kind": "skill",
+      "deployAs": "setup-files-investigate",
+      "hash": "94e8ac74b437641d8f147ab41888ff01717a4f2babecd78d5102125d75bc0c49"
+    },
+    "spec-to-tasklist": {
+      "kind": "skill",
+      "deployAs": "spec-to-tasklist",
+      "hash": "982b1b3035db4ad129861690b931650c04bda08f3429a3d4e9ae309e53ed5877"
+    },
+    "swagger-api-reader": {
+      "kind": "skill",
+      "deployAs": "swagger-api-reader",
+      "hash": "7e7d502528540c3222ad687611af3a037640351e0c50ca0758a6b8a9525658e3"
+    }
+  }
+}

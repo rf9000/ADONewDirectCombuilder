@@ -13,16 +13,18 @@ Creates a pull request in Azure DevOps by reusing the existing PR message genera
   - Single ID: `72245`
   - Multiple IDs (comma-separated): `72245,72246,72247`
   - If not provided, you'll be prompted
-- `testEnvironmentBlock` (optional, context only — never a command-line arg): A pre-formatted test-environment block (name, URL, username, password) supplied by `fw-start.md` Step 3.6 when the user opted to include one. This is appended directly to the PR description in Step 3.5 below. It is passed as in-memory context between skill invocations in the same session — it is **never** read from, or written to, the git commit message or any file. If `fw-create-pr` is invoked standalone with no such context, no test-environment section is added (there is no commit message to parse it from).
+- `testEnvironmentBlock` (optional, context only — never a command-line arg): A pre-formatted test-environment block (name, URL, username, password) supplied by `fw-start.md` Step 3.6 when the user opted to include one. It is appended to the PR description in Step 3.5 below. Passed as in-memory context between skill invocations in the same session; if `fw-create-pr` is invoked standalone with no such context, no test-environment section is added.
+
+  These are internal demo-environment credentials on short-lived environments — shared knowledge on the team, not secrets. They belong in the PR description where reviewers can see them. Keep them out of the **commit message** only (git history is permanent and the value there is nil); `fw-start.md` Step 4 has a one-line guard for that.
 
 ## What This Command Does
 
 1. Validates you're on a feature branch (not main)
 2. Checks that commits exist on your branch
 3. Reads repository configuration from workflow-config.json
-4. Generates PR message by calling `/FinishWork:fw-step4-pullRequest`
+4. Obtains the PR message — from `fw-start` context when present, otherwise by calling `/FinishWork:fw-step4-pullRequest`
 5. Optionally links to a work item
-6. Creates the pull request in Azure DevOps
+6. Creates the pull request in Azure DevOps (non-draft) and verifies links + draft state
 7. Sets any linked work item(s) to **Active**
 8. Displays PR URL and assigned reviewers
 
@@ -97,7 +99,7 @@ Parse JSON and extract: `config.azureDevOps.repository.id`
 **If repository.id NOT found or config file doesn't exist:**
 
 #### List Available Repositories
-Call `mcp__azureDevOps__list_repositories` to get all repositories.
+Call `mcp__ado__repo_repository` with `action: "list"` and `project: "Continia Software"` to get all repositories.
 
 **If no repositories returned:**
 ```markdown
@@ -162,13 +164,19 @@ Continuing with PR creation...
 
 ---
 
-## Step 3: Generate PR Message
+## Step 3: Obtain PR Message
 
-### Invoke Message Generation Command
+The PR title and description are the commit message's title and bullets. Get the message from the first source that applies:
+
+**Source A — caller-supplied context (full `fw-start` flow):** `fw-start.md` STEP 4 already ran `fw-step4-pullRequest`, displayed the result and got the user's approval. When `fw-start` invokes this skill, that approved block is in the conversation context — use it verbatim. Do NOT call the generator again; regenerating could produce a message that differs from what was just committed.
+
+**Source B — standalone invocation (no such context):**
 
 **Call:** `/FinishWork:fw-step4-pullRequest`
 
-This command will analyze your staged/committed changes and generate a message in this format:
+With nothing staged and commits ahead of main, that command reuses HEAD's commit message verbatim when it already has the title + bullets shape, and only generates a fresh message when it doesn't — so the PR still mirrors the commit.
+
+Both sources deliver the message in this format:
 
 ```
 ### Commit Message (exactly as it will appear):
@@ -206,7 +214,7 @@ The commit message never contains credentials or environment details — Step 3.
 
 **Example Parsing:**
 
-**Input from fw-step4-pullRequest:**
+**Input (from `fw-start` context or `fw-step4-pullRequest` output):**
 ```
 ### Commit Message (exactly as it will appear):
 
@@ -230,9 +238,7 @@ Store and download EBICS initialization letter PDF from BanksAPI
 
 ## Step 3.5: Append Test Environment Block to PR Description (if provided)
 
-**Purpose:** If `fw-start.md` Step 3.6 collected a test environment for this run, its credentials go into the PR description here — directly, via the Azure DevOps API call in Step 5. They never pass through git.
-
-**Condition:** Only runs if `testEnvironmentBlock` context was supplied by the caller (see Usage above). If this skill is invoked standalone with no such context, skip this step — the description stays as parsed in Step 3.
+**Condition:** Only runs if `testEnvironmentBlock` context was supplied by the caller (see Usage above). Otherwise skip — the description stays as parsed in Step 3.
 
 **Action:** Append the supplied block to the description parsed in Step 3, separated by a blank line:
 
@@ -242,7 +248,7 @@ Store and download EBICS initialization letter PDF from BanksAPI
 {testEnvironmentBlock}
 ```
 
-`testEnvironmentBlock` already contains its own `---` separator and `**Test Environment**` header (see `fw-start.md` Step 3.6), so no additional formatting is needed here — just concatenate.
+`testEnvironmentBlock` already carries its own `---` separator and `**Test Environment**` header (see `fw-start.md` Step 3.6) — just concatenate.
 
 **Example (combined description used in Step 5):**
 ```
@@ -324,62 +330,96 @@ git branch --show-current
 ### Prepare API Call
 
 **Repository ID:** Read from config (Step 2)
-**Title:** Parsed from fw-step4-pullRequest (Step 3)
-**Description:** Parsed bullets from fw-step4-pullRequest (Step 3), plus the test-environment block from Step 3.5 if one was supplied
+**Title:** Parsed from the message (Step 3)
+**Description:** Parsed bullets from the message (Step 3), plus the test-environment block from Step 3.5 if one was supplied
+**Draft:** `isDraft: false` — always pass it explicitly. The PR must be published (non-draft) so reviewers are notified and branch policies run.
 **Source Branch:** `refs/heads/{current-branch}` (from git command above)
 **Target Branch:** `refs/heads/main` (Continia Banking default)
-**Work Items:** Array with work item ID(s) - can contain single or multiple IDs, or empty array
+**Work Items:** `workItems` is a **space-separated string** of work item IDs (NOT a JSON array) - omit the parameter entirely when there is no work item
 
 ### Call Azure DevOps API
 
-Use `mcp__azureDevOps__create_pull_request`:
+Use `mcp__ado__repo_pull_request_write` with `action: "create"`:
 
 ```json
 {
+  "action": "create",
+  "project": "Continia Software",
   "repositoryId": "{from config - e.g., a838fce3-3b9c-4c78-beec-cb4cf5983144}",
   "title": "{parsed title}",
   "description": "{parsed description - bullets only}",
   "sourceRefName": "refs/heads/{current-branch}",
   "targetRefName": "refs/heads/main",
-  "workItemRefs": [{work-item-id}]  // Or [] if no work item
+  "isDraft": false,
+  "workItems": "{work-item-id}"  // Omit this key entirely if no work item
 }
 ```
 
 **Example with single work item:**
 ```json
 {
+  "action": "create",
+  "project": "Continia Software",
   "repositoryId": "a838fce3-3b9c-4c78-beec-cb4cf5983144",
   "title": "Store and download EBICS initialization letter PDF from BanksAPI",
   "description": "- Added PDF blob field to Bank table to store initialization letters\n- Added SavePDFInFileArchive procedure to extract and decode PDF from BanksAPI response\n- Added ModifyBank codeunit for background Bank record updates with isolated permissions",
   "sourceRefName": "refs/heads/Userstory/RF/SaveEbicsPDF",
   "targetRefName": "refs/heads/main",
-  "workItemRefs": [72245]
+  "isDraft": false,
+  "workItems": "72245"
 }
 ```
 
-**Example with multiple work items:**
+**Example with multiple work items** (space-separated, not comma-separated):
 ```json
 {
+  "action": "create",
+  "project": "Continia Software",
   "repositoryId": "a838fce3-3b9c-4c78-beec-cb4cf5983144",
   "title": "Add multi-bank system support with payment method conflict resolution",
   "description": "- Added bank provider support for Nordea and Danske Bank\n- Implemented payment method conflict resolution logic\n- Added Bank System Setup Wizard for multi-bank configuration",
   "sourceRefName": "refs/heads/feature/multi-bank-support",
   "targetRefName": "refs/heads/main",
-  "workItemRefs": [72245, 72246, 72247]
+  "isDraft": false,
+  "workItems": "72245 72246 72247"
 }
 ```
 
-**Example without work item:**
+**Example without work item** (`workItems` omitted):
 ```json
 {
+  "action": "create",
+  "project": "Continia Software",
   "repositoryId": "a838fce3-3b9c-4c78-beec-cb4cf5983144",
   "title": "Fix typo in Bank Card caption",
   "description": "- Fixed typo in Bank Card page caption",
   "sourceRefName": "refs/heads/fix/bank-card-typo",
   "targetRefName": "refs/heads/main",
-  "workItemRefs": []
+  "isDraft": false
 }
 ```
+
+### Verify the Created PR (mandatory)
+
+The `create` response is not trustworthy on its own: it does not echo linked work items, and it has been observed to report `"isDraft": false` while the PR actually landed as a **draft**. Always re-read the PR with `mcp__ado__repo_pull_request` (`action: "get"`, `pullRequestId: {id}`, `repositoryId: {from config}`, `includeWorkItemRefs: true`) and check BOTH:
+
+1. **Work items:** `workItemRefs` lists every ID you passed (skip when `workItemRefs` is `[]`).
+2. **Draft state:** `isDraft` is `false`.
+
+**If `isDraft` is `true`:** the PR is invisible to reviewers and branch policies have not run. Warn the user and offer to publish it:
+
+```markdown
+⚠️ The PR was created as a **draft** (Azure DevOps ignored `isDraft: false`).
+
+1 - [Publish] - Mark the PR as ready for review now
+2 - [Keep draft] - Leave it as a draft; I'll publish it myself later
+
+Enter your choice:
+```
+
+On **Publish**, call `mcp__ado__repo_pull_request_write` with `action: "update"`, `pullRequestId: {id}`, `repositoryId: {from config}`, `isDraft: false`, then `get` the PR again and confirm `isDraft` is now `false`. If it is still `true`, report that and stop retrying — the user must publish from the ADO UI. On **Keep draft**, continue but show the PR as **Draft** in Step 6 output.
+
+**If work items are missing from `workItemRefs`:** report which IDs did not link. Do not silently continue — the work-item ↔ PR link is what the team relies on for traceability.
 
 ---
 
@@ -391,13 +431,15 @@ Use `mcp__azureDevOps__create_pull_request`:
 
 **For each work item ID in `workItemRefs`:**
 
-1. Fetch the current state with `mcp__azureDevOps__get_work_item` (read `System.State`).
+1. Fetch the current state with `mcp__ado__wit_work_item` (`action: "get"`, `id: {work-item-id}`) and read `System.State`.
 2. If the state is already `Active`, skip it (no-op).
-3. Otherwise, set it to `Active` using `mcp__azureDevOps__update_work_item`:
+3. Otherwise, set it to `Active` using `mcp__ado__wit_work_item_write` with `action: "update"` (note: the parameter is `id`, not `workItemId`):
 
 ```json
 {
-  "workItemId": {work-item-id},
+  "action": "update",
+  "project": "Continia Software",
+  "id": {work-item-id},
   "updates": [
     {
       "op": "replace",
@@ -435,9 +477,10 @@ Extract from the Azure DevOps response:
 **URL:** {webUrl or html link}
 
 **Branch:** {sourceRefName} → {targetRefName}
-**Status:** Active (awaiting review)
+**Status:** {Active (awaiting review) | ⚠️ Draft — not yet visible to reviewers} (from the verified `isDraft` value, not the create response)
 {If work items linked: **Linked Work Items:** {comma-separated list with # prefix, e.g., #72245, #72246, #72247} — set to Active}
 {If any work item could NOT be set to Active: **⚠️ Could not set to Active:** {comma-separated list with # prefix and reason}}
+{If a test environment was included: **Test Environment:** {env name} — included in the PR description}
 
 ### Reviewers Assigned:
 {For each reviewer:}
@@ -523,7 +566,7 @@ Extract from the Azure DevOps response:
 **Message:** Explain that changes must be committed first
 
 ### Error 3: No Repositories Found
-**Trigger:** `mcp__azureDevOps__list_repositories` returns empty list
+**Trigger:** `mcp__ado__repo_repository` (`action: "list"`) returns empty list
 **Action:** Display error and stop
 **Message:** Explain that no repositories were found and suggest checking access
 
@@ -538,7 +581,7 @@ Extract from the Azure DevOps response:
 
 ### Message Parsing Strategy
 
-The fw-step4-pullRequest command outputs text that looks like this:
+The fw-step4-pullRequest command (and the `fw-start` context carrying its output) looks like this:
 
 ```
 Some preamble text...
@@ -550,8 +593,6 @@ Title Line Here
 - Bullet point 1
 - Bullet point 2
 - Bullet point 3
-
-Some trailing text...
 ```
 
 **Parsing approach:**
@@ -559,6 +600,7 @@ Some trailing text...
 2. Skip that line and any empty lines after it
 3. Next non-empty line = Title
 4. Collect all following lines starting with "- " = Description bullets
+5. Stop at the first `Co-Authored-By:`/attribution line if one is present — it never goes into the PR
 
 ### Config File Structure
 
@@ -586,22 +628,24 @@ The workflow-config.json should have this structure after update:
 
 **Four scenarios:**
 
+The IDs are held internally as the `workItemRefs` array, but the create call takes them as `workItems` — a **space-separated string**. Note the argument is comma-separated while the API parameter is space-separated; converting between the two is the easiest thing to get wrong here.
+
 1. **Single work item provided as argument:** `/FinishWork:fw-create-pr 72245`
    - Parse: `72245`
-   - Use: `workItemRefs: [72245]`
+   - Pass: `"workItems": "72245"`
 
 2. **Multiple work items provided as argument:** `/FinishWork:fw-create-pr 72245,72246,72247`
    - Parse: Split by comma, trim whitespace
    - Validate: Each is numeric
-   - Use: `workItemRefs: [72245, 72246, 72247]`
+   - Pass: `"workItems": "72245 72246 72247"` (joined with spaces, NOT commas)
 
 3. **User prompted and provides ID(s):**
    - Prompt: "Enter work item ID(s): (Single: 72245, Multiple: 72245,72246,72247)"
    - Parse and validate input
-   - Use: `workItemRefs: [parsed IDs]`
+   - Pass: `"workItems": "{parsed IDs joined by spaces}"`
 
 4. **User chooses not to link:**
-   - Use: `workItemRefs: []`
+   - Omit the `workItems` key entirely
    - PR created without work item connection
 
 ### Branch Name Formatting
@@ -640,10 +684,11 @@ User runs: /FinishWork:fw-create-pr
 [3] Read repository ID from config
     - If configured: use stored ID ✓
     - If NOT configured: list repos → user selects → save to config ✓
-[4] Generate message via fw-step4-pullRequest ✓
+[4] Message from fw-start context, else via fw-step4-pullRequest ✓
 [5] Prompt for work item (user chooses Yes/No)
-[6] Create PR in Azure DevOps ✓
-[7] Display PR URL and reviewers ✓
+[6] Create PR in Azure DevOps (isDraft: false) → verify links + not draft ✓
+[7] Set linked work items to Active ✓
+[8] Display PR URL and reviewers ✓
 ```
 
 ### Configuration Prerequisites
@@ -673,4 +718,4 @@ If you prefer to pre-configure, add to `.claude/workflow-config.json`:
 - Keep repository ID in sync if repo changes (rare)
 - Update target branch if default changes from `main`
 - Add additional validation as needed
-- Consider adding draft PR option in future
+- PRs are always created non-draft; a draft option would need a new argument and a change to the Step 5 verification
