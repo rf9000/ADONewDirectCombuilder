@@ -36,13 +36,14 @@ bun run src/cli/index.ts help
 ```
 
 Required in `.env`: `AZURE_DEVOPS_PAT`, `AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_PROJECT`,
-`ANTHROPIC_API_KEY`, `CONTINIA_API_TOKEN`, `BANKING_REPO_ID`, `SETUP_FILES_REPO_ID`.
+`ANTHROPIC_API_KEY`, `BANKING_REPO_ID`, `SETUP_FILES_REPO_ID`, and either `CONTINIA_API_TOKEN`
+or `CONTINIA_AUTH_METHOD=azure-ad` (see "Continia CLI sign-in" below).
 The PAT needs **Work Items (Read & Write)** and **Code (Read, Write & Manage)**.
 `ANTHROPIC_API_KEY` is this bot's own — not shared with the other services in the stack.
 
 The three ADO values and `ANTHROPIC_API_KEY` are validated on boot. `CONTINIA_API_TOKEN` is
-required only when `SKIP_BUILD_TEST=false`, since the verify phase is the only thing that needs
-it. The two repo GUIDs are checked when the repo cache is first built — `status` prints
+required only in api-token mode with `SKIP_BUILD_TEST=false`, since the verify phase is the only
+thing that needs it. The two repo GUIDs are checked when the repo cache is first built — `status` prints
 `ID NOT SET` for a missing one.
 
 Every tag, repo id, model, interval and path is configurable — see `.env.example`.
@@ -131,6 +132,26 @@ docker compose run --rm --entrypoint sh new-comm-builder \
 docker compose up -d new-comm-builder
 docker compose logs -f new-comm-builder
 ```
+
+### Continia CLI sign-in
+
+`CONTINIA_AUTH_METHOD` picks how the CLI authenticates: `api-token` (`CONTINIA_API_TOKEN`) or
+`azure-ad` (an OAuth session). Unset, it is `api-token` when a token is set, else `azure-ad`. The
+bot passes the method to every agent session and, in azure-ad mode, removes the token from it.
+
+The entrypoint links `~/.continia` to `/data/continia`, so the session survives rebuilds. To
+switch to Azure AD:
+
+1. In `.env.new-comm-builder`, set `CONTINIA_AUTH_METHOD=azure-ad` and empty `CONTINIA_API_TOKEN`.
+2. `docker compose up -d --build new-comm-builder`
+3. `docker compose exec -u bun new-comm-builder continia auth login` — open the URL, enter the
+   code, sign in.
+4. `docker compose exec -u bun new-comm-builder continia auth status`, then
+   `docker compose exec -u bun new-comm-builder continia env profiles versions --json`.
+
+Environments are created under the signed-in Azure AD account, not the token owner. After a long
+idle period or a password or policy change, `auth status` shows the session as invalid; run
+`auth login` again. A 401 in verify says which credential to renew.
 
 That third check matters more than it looks: the verify phase is the only thing that compiles AL,
 so a compiler that can't start fails every job after a full plan and implement have already run.

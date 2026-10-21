@@ -18,6 +18,9 @@ export interface RepoTarget {
   seedPath?: string;
 }
 
+/** How the Continia CLI authenticates to DemoPortal. */
+export type ContiniaAuthMethod = 'api-token' | 'azure-ad';
+
 /** Application configuration loaded from environment variables. */
 export interface AppConfig {
   // --- Azure DevOps ---
@@ -74,6 +77,8 @@ export interface AppConfig {
 
   // --- Continia CLI ---
   continiaCliPath: string;
+  /** CONTINIA_AUTH_METHOD, resolved: api-token when a token is set, else azure-ad. */
+  continiaAuthMethod: ContiniaAuthMethod;
 
   // --- Behaviour ---
   draftPr: boolean;

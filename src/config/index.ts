@@ -97,6 +97,10 @@ const envSchema = z.object({
   SKILLS_SOURCE_DIR: z.string().default("/app/.claude"),
 
   // --- Continia CLI ---
+  // api-token uses CONTINIA_API_TOKEN; azure-ad uses the session that
+  // `continia auth login` saved in ~/.continia/auth.json. Unset picks api-token
+  // when a token is set, else azure-ad.
+  CONTINIA_AUTH_METHOD: z.enum(["api-token", "azure-ad"]).optional(),
   // Only the verify phase needs the token, so it is enforced below against
   // SKIP_BUILD_TEST rather than being unconditionally required — a harness
   // smoke test should not need a DemoPortal token.
@@ -131,13 +135,22 @@ export function loadConfig(
     );
   }
 
+  const continiaAuthMethod =
+    parsed.CONTINIA_AUTH_METHOD ??
+    (parsed.CONTINIA_API_TOKEN.trim() !== '' ? 'api-token' : 'azure-ad');
+
   // The verify phase drives the Continia CLI, and a missing token would only
-  // surface there — after a full plan and implement had already run.
-  if (!parsed.SKIP_BUILD_TEST && parsed.CONTINIA_API_TOKEN.trim() === '') {
+  // surface there — after a full plan and implement had already run. An Azure AD
+  // session lives in auth.json, which config cannot check.
+  if (
+    !parsed.SKIP_BUILD_TEST &&
+    continiaAuthMethod === 'api-token' &&
+    parsed.CONTINIA_API_TOKEN.trim() === ''
+  ) {
     throw new Error(
       'Invalid configuration:\n' +
-        '  - CONTINIA_API_TOKEN: required unless SKIP_BUILD_TEST=true, because ' +
-        'the verify phase uses the Continia CLI',
+        '  - CONTINIA_API_TOKEN: required with CONTINIA_AUTH_METHOD=api-token unless ' +
+        'SKIP_BUILD_TEST=true, because the verify phase uses the Continia CLI',
     );
   }
 
@@ -206,6 +219,7 @@ export function loadConfig(
     skillsSourceDir: parsed.SKILLS_SOURCE_DIR,
 
     continiaCliPath: parsed.CONTINIA_CLI_PATH,
+    continiaAuthMethod,
 
     draftPr: parsed.DRAFT_PR,
     skipBuildTest: parsed.SKIP_BUILD_TEST,

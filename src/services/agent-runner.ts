@@ -5,6 +5,7 @@ import type {
   AgentOverrides,
   AgentRunResult,
   AppConfig,
+  ContiniaAuthMethod,
   ModelUsageSummary,
   RateLimitInfo,
 } from '../types/index.ts';
@@ -154,15 +155,24 @@ export function withMcpTools(
  * and an unattended session can end while one is still running, losing its
  * work: #83634 lost its test planner and an assembler that way. Off, every
  * Agent call blocks until the subagent reports back.
+ *
+ * The skills call the Continia CLI, so the auth method goes to the child too.
+ * The CLI ranks CONTINIA_AUTH_METHOD above a token, but in azure-ad mode the
+ * token is dropped anyway so no agent can fall back to it.
  */
 export function buildChildEnv(
   options: Pick<AgentRunOptions, 'env' | 'subagentModel'>,
+  continiaAuthMethod?: ContiniaAuthMethod,
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {
     ...(options.env ?? process.env),
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
   };
   if (options.subagentModel) env.CLAUDE_CODE_SUBAGENT_MODEL = options.subagentModel;
+  if (continiaAuthMethod) {
+    env.CONTINIA_AUTH_METHOD = continiaAuthMethod;
+    if (continiaAuthMethod === 'azure-ad') delete env.CONTINIA_API_TOKEN;
+  }
   return env;
 }
 
@@ -217,7 +227,7 @@ export async function runAgent(
     options.allowedTools ?? (useLsp ? [...ALLOWED_TOOLS, 'LSP'] : ALLOWED_TOOLS),
     mcpServers,
   );
-  const env = buildChildEnv(options);
+  const env = buildChildEnv(options, config.continiaAuthMethod);
 
   let text = '';
   let sessionId: string | undefined;

@@ -229,6 +229,18 @@ describe('buildChildEnv', () => {
     expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
   });
 
+  test('passes the Continia auth method and keeps the token in api-token mode', () => {
+    const env = buildChildEnv({ env: { CONTINIA_API_TOKEN: 't' } }, 'api-token');
+    expect(env.CONTINIA_AUTH_METHOD).toBe('api-token');
+    expect(env.CONTINIA_API_TOKEN).toBe('t');
+  });
+
+  test('drops the token in azure-ad mode', () => {
+    const env = buildChildEnv({ env: { CONTINIA_API_TOKEN: 't' } }, 'azure-ad');
+    expect(env.CONTINIA_AUTH_METHOD).toBe('azure-ad');
+    expect('CONTINIA_API_TOKEN' in env).toBe(false);
+  });
+
   test('spreads process.env when only the subagent model is set', () => {
     const env = buildChildEnv({ subagentModel: 'm' });
     expect(env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe('m');
@@ -320,6 +332,7 @@ describe('runAgent with an injected query', () => {
       PATH: '/bin',
       CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
       CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001',
+      CONTINIA_AUTH_METHOD: 'api-token',
     });
     expect(options.allowedTools).toEqual(['Read']);
     expect(options.mcpServers).toBeUndefined();

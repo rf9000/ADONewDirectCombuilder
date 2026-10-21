@@ -72,4 +72,7 @@ ENV NODE_ENV=production \
 # The agent SDK shells out to git; make sure it never blocks on a credential prompt.
 ENV GIT_TERMINAL_PROMPT=0
 
+# Links ~/.continia onto /data so the CLI's Azure AD sign-in survives rebuilds.
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["bun", "run", "src/cli/index.ts", "watch"]

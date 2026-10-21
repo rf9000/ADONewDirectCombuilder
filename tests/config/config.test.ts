@@ -105,10 +105,31 @@ describe("loadConfig", () => {
 
   // Without this the token's absence only surfaces in the verify phase, after a
   // full plan and implement have already run.
-  it("requires CONTINIA_API_TOKEN when the verify phase will run", () => {
-    const env = { ...validEnv };
+  it("requires CONTINIA_API_TOKEN in api-token mode when the verify phase will run", () => {
+    const env: Record<string, string> = { ...validEnv, CONTINIA_AUTH_METHOD: "api-token" };
     delete env.CONTINIA_API_TOKEN;
     expect(() => loadConfig(env)).toThrow("CONTINIA_API_TOKEN");
+  });
+
+  it("defaults the Continia auth method to api-token when a token is set", () => {
+    expect(loadConfig(validEnv).continiaAuthMethod).toBe("api-token");
+  });
+
+  it("defaults the Continia auth method to azure-ad without a token, and needs none", () => {
+    const env = { ...validEnv };
+    delete env.CONTINIA_API_TOKEN;
+    expect(loadConfig(env).continiaAuthMethod).toBe("azure-ad");
+  });
+
+  it("lets CONTINIA_AUTH_METHOD=azure-ad override a leftover token", () => {
+    const config = loadConfig({ ...validEnv, CONTINIA_AUTH_METHOD: "azure-ad" });
+    expect(config.continiaAuthMethod).toBe("azure-ad");
+  });
+
+  it("rejects an unknown CONTINIA_AUTH_METHOD", () => {
+    expect(() => loadConfig({ ...validEnv, CONTINIA_AUTH_METHOD: "oauth" })).toThrow(
+      "CONTINIA_AUTH_METHOD",
+    );
   });
 
   it("does not require CONTINIA_API_TOKEN when the build/test phase is skipped", () => {

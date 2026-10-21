@@ -80,6 +80,10 @@ docker-compose.
   card list and the "Month"/"All time" totals, as for investigate, mutant-fixer and DevOpsCoder.
   Do not swap it for a `processed-items.json`/`processed-prs.json` like docs-writer and
   release-notes: those cover 30 days and carry no full history
+- **Continia CLI auth** — `CONTINIA_AUTH_METHOD` (`api-token` | `azure-ad`; unset = api-token
+  when `CONTINIA_API_TOKEN` is set, else azure-ad). `buildChildEnv` sets it in every agent
+  session and drops the token in azure-ad mode. `docker-entrypoint.sh` links `~/.continia` to
+  `/data/continia` so the `continia auth login` session survives rebuilds
 - **Serialized jobs** — one at a time; BC cannot run concurrent test jobs on one environment
 - **Tag-swap handshake** — the bot swaps the trigger tag for a waiting tag when it needs answers;
   re-adding the trigger tag resumes the job. Blocking questions pause up to `MAX_CLARIFY_ROUNDS`;

@@ -466,9 +466,18 @@ export function buildVerifyPrompt(
 ): string {
   return `Build and test the changes in \`${bankingWorktree}\` on a real BC environment.
 
-The Continia CLI is on PATH as \`continia\` (a Linux build; it authenticates from
-\`CONTINIA_API_TOKEN\` in the environment, so there is no VS Code setting to read).
+The Continia CLI is on PATH as \`continia\` (a Linux build; ${
+    config.continiaAuthMethod === 'azure-ad'
+      ? 'it authenticates with the Azure AD session that `continia auth login` saved, ' +
+        'selected by `CONTINIA_AUTH_METHOD=azure-ad` in the environment'
+      : 'it authenticates from `CONTINIA_API_TOKEN` in the environment'
+  }, so there is no VS Code setting to read). Do not pass \`--auth-method\` or \`--token\`.
 When a skill tells you the CLI lives at \`.tools/continia.exe\`, use \`continia\` instead.
+If a CLI call fails with 401, stop and report that ${
+    config.continiaAuthMethod === 'azure-ad'
+      ? 'the Azure AD session expired and needs `continia auth login` again'
+      : 'the DemoPortal API token (`CONTINIA_API_TOKEN`) needs renewing'
+  } — do not retry.
 
 ## Steps
 
