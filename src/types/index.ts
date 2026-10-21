@@ -111,6 +111,24 @@ export interface WorkItemComment {
   createdDate?: string;
 }
 
+/** An Azure DevOps identity. */
+export interface IdentityRef {
+  id?: string;
+  displayName?: string;
+  uniqueName?: string;
+}
+
+/**
+ * One revision from `/workItems/{id}/updates`. `fields` maps a field reference
+ * name to its old/new value for that revision.
+ */
+export interface WorkItemUpdate {
+  id?: number;
+  revisedBy?: IdentityRef;
+  revisedDate?: string;
+  fields?: Record<string, { oldValue?: unknown; newValue?: unknown }>;
+}
+
 /** Response shape from the work item comments endpoint. */
 export interface WorkItemCommentsResult {
   totalCount: number;

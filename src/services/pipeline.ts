@@ -18,6 +18,7 @@ import type {
 } from '../types/index.ts';
 import type { StateStore } from '../state/state-store.ts';
 import { costLedgerFor, costRecordFor, lifetimeSpentUsd } from '../state/cost-ledger.ts';
+import { lookupTriggeredBy } from '../utils/triggered-by.ts';
 import type { CostRecord, RunCostLedger } from '../state/cost-ledger.ts';
 import * as ado from '../sdk/azure-devops-client.ts';
 import * as ws from './workspace.ts';
@@ -44,6 +45,7 @@ const COMMIT_AUTHOR = {
 
 export interface PipelineDeps {
   getWorkItemComments: typeof ado.getWorkItemComments;
+  getWorkItemUpdates: typeof ado.getWorkItemUpdates;
   addWorkItemComment: typeof ado.addWorkItemComment;
   swapWorkItemTags: typeof ado.swapWorkItemTags;
   createPullRequest: typeof ado.createPullRequest;
@@ -66,6 +68,7 @@ export interface PipelineDeps {
 
 export const defaultDeps: PipelineDeps = {
   getWorkItemComments: ado.getWorkItemComments,
+  getWorkItemUpdates: ado.getWorkItemUpdates,
   addWorkItemComment: ado.addWorkItemComment,
   swapWorkItemTags: ado.swapWorkItemTags,
   createPullRequest: ado.createPullRequest,
@@ -869,8 +872,14 @@ export async function runJob(
   // One ledger line per run, carrying the job's cumulative spend at the time.
   // Best-effort by construction: the ledger swallows its own write errors.
   const recordRunCost = deps.costLedger(config).beginRun(item.id);
+  // Who tagged the item, looked up once; a failed lookup is 'unknown', never a failed run.
+  const triggeredBy = await lookupTriggeredBy(
+    () => deps.getWorkItemUpdates(config, item.id),
+    [config.triggerTag],
+    log,
+  );
   const recordCost = (outcome: CostRecord['outcome'], prId?: number) =>
-    recordRunCost(costRecordFor(store, item, outcome, prId));
+    recordRunCost(costRecordFor(store, item, outcome, prId, triggeredBy));
 
   let ctx: PhaseContext | undefined;
 

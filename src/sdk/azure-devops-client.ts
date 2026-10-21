@@ -4,6 +4,7 @@ import type {
   WiqlQueryResult,
   WorkItemComment,
   WorkItemCommentsResult,
+  WorkItemUpdate,
   GitRef,
   PullRequestRef,
   RepoTarget,
@@ -159,6 +160,16 @@ export async function getWorkItemComments(
   const data = await adoFetchWithRetry<WorkItemCommentsResult>(config, path);
   // Oldest first, so the conversation reads top-to-bottom.
   return [...(data.comments ?? [])].sort((a, b) => a.id - b.id);
+}
+
+/** Revision history of a work item, oldest first. */
+export async function getWorkItemUpdates(
+  config: AppConfig,
+  workItemId: number,
+): Promise<WorkItemUpdate[]> {
+  const path = `wit/workItems/${workItemId}/updates?api-version=7.1`;
+  const data = await adoFetchWithRetry<{ value?: WorkItemUpdate[] }>(config, path);
+  return data.value ?? [];
 }
 
 export async function addWorkItemComment(

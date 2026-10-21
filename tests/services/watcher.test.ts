@@ -39,6 +39,11 @@ function makeDeps(overrides: Partial<WatcherDeps> = {}): WatcherDeps {
       const ledger = createRunCostLedger({ record: (entry) => ledgerLines.push(entry) });
       return () => ledger;
     })(),
+    getWorkItemUpdates: mock(() =>
+      Promise.resolve([
+        { revisedBy: { uniqueName: 'Ann@X.com' }, fields: { 'System.Tags': { newValue: 'Agent' } } },
+      ]),
+    ),
     ...overrides,
   };
 }
@@ -239,6 +244,17 @@ describe('runPollCycle — cost ledger', () => {
       costUsd: 12.25,
       title: 'Slow bank',
     });
+  });
+
+  test('the abandoned failure line carries who triggered the item', async () => {
+    const deps = makeDeps({
+      fetchItems: mock(() => Promise.resolve([mockWorkItem({ id: 1 })])),
+      processItem: mock(() => Promise.reject(new Error('boom'))),
+    });
+
+    await runPollCycle(config({ triggerTag: 'Agent' }), store, deps);
+
+    expect(ledgerLines[0]!.triggeredBy).toBe('ann@x.com');
   });
 
   test("the timed-out job's own late record is suppressed, so the failure is written once", async () => {

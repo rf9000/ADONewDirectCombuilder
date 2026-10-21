@@ -273,6 +273,12 @@ function makeDeps(fake: FakeOptions = {}): PipelineDeps {
     uploadAttachment: mock(async () => ({ id: 'att-1', url: 'https://example/att-1' })),
     linkAttachmentToWorkItem: mock(async () => undefined),
     linkPullRequestToWorkItem: mock(async () => mockWorkItem()),
+    getWorkItemUpdates: mock(async () => [
+      {
+        revisedBy: { uniqueName: 'Ann@X.com' },
+        fields: { 'System.Tags': { newValue: config().triggerTag } },
+      },
+    ]),
     costLedger: (() => {
       const ledger = createRunCostLedger({ record: (entry) => ledgerLines.push(entry) });
       return () => ledger;
@@ -1459,6 +1465,26 @@ describe('runJob — cost ledger', () => {
     expect(ledgerLines[0]).toMatchObject({ workItemId: 42, outcome: 'failed' });
     expect(ledgerLines[0]!.costUsd).toBe(store.get(42)!.lifetimeSpentUsd!);
     expect(ledgerLines[0]!.prId).toBeUndefined();
+  });
+
+  test('every line of a run carries who triggered it, looked up once per run', async () => {
+    const deps = makeDeps({ questions: OPEN_PLAN });
+    await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(ledgerLines.length).toBeGreaterThanOrEqual(1);
+    for (const line of ledgerLines) expect(line.triggeredBy).toBe('ann@x.com');
+    expect(deps.getWorkItemUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  test('a failed lookup records unknown without failing the run', async () => {
+    const deps = makeDeps();
+    (deps as unknown as { getWorkItemUpdates: unknown }).getWorkItemUpdates = async () => {
+      throw new Error('ado down');
+    };
+    const result = await runJob(config(), mockWorkItem(), store, deps);
+
+    expect(result.phase).toBe('done');
+    expect(ledgerLines[0]!.triggeredBy).toBe('unknown');
   });
 
   test('writes nothing in a dry run', async () => {

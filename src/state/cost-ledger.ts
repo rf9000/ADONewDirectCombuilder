@@ -24,6 +24,8 @@ export interface CostRecord {
   title?: string;
   /** First draft PR id, when one was opened. */
   prId?: number;
+  /** Lowercased email of who added the trigger tag, or 'automatic' / 'unknown'. Absent on older lines. */
+  triggeredBy?: string;
 }
 
 export interface CostLedger {
@@ -130,6 +132,7 @@ export function costRecordFor(
   item: WorkItemResponse,
   outcome: CostRecord['outcome'],
   prId?: number,
+  triggeredBy?: string,
 ): CostRecord {
   const title = item.fields['System.Title'];
   const job = store.get(item.id);
@@ -140,6 +143,7 @@ export function costRecordFor(
     costUsd: job?.lifetimeSpentUsd ?? job?.spentUsd ?? 0,
     ...(typeof title === 'string' && title !== '' ? { title } : {}),
     ...(prId !== undefined ? { prId } : {}),
+    ...(triggeredBy !== undefined ? { triggeredBy } : {}),
   };
 }
 

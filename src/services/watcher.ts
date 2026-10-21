@@ -8,6 +8,7 @@ import { costLedgerFor, costRecordFor } from '../state/cost-ledger.ts';
 import type { RunCostLedger } from '../state/cost-ledger.ts';
 import * as sdk from '../sdk/azure-devops-client.ts';
 import * as proc from './processor.ts';
+import { lookupTriggeredBy } from '../utils/triggered-by.ts';
 
 export interface WatcherDeps {
   fetchItems: (config: AppConfig) => Promise<WorkItemResponse[]>;
@@ -23,6 +24,9 @@ export interface WatcherDeps {
    * timed-out run's late record is suppressed (see RunCostLedger).
    */
   costLedger: (config: AppConfig) => RunCostLedger;
+
+  /** Revision history, to find who tagged an abandoned item. */
+  getWorkItemUpdates: typeof sdk.getWorkItemUpdates;
 }
 
 async function defaultFetchItems(config: AppConfig): Promise<WorkItemResponse[]> {
@@ -35,6 +39,7 @@ const defaultDeps: WatcherDeps = {
   fetchItems: defaultFetchItems,
   processItem: proc.processItem,
   costLedger: costLedgerFor,
+  getWorkItemUpdates: sdk.getWorkItemUpdates,
 };
 
 function log(message: string): void {
@@ -132,7 +137,14 @@ export async function runPollCycle(
       // a ledger line. recordAbandoned also invalidates the still-running job
       // so its eventual outcome is not recorded a second time.
       if (!config.dryRun) {
-        deps.costLedger(config).recordAbandoned(costRecordFor(stateStore, item, 'failed'));
+        const triggeredBy = await lookupTriggeredBy(
+          () => deps.getWorkItemUpdates(config, item.id),
+          [config.triggerTag],
+          log,
+        );
+        deps.costLedger(config).recordAbandoned(
+          costRecordFor(stateStore, item, 'failed', undefined, triggeredBy),
+        );
       }
       errors++;
     }
