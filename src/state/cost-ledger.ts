@@ -80,6 +80,8 @@ export interface RunCostLedger {
   beginRun(workItemId: number): (entry: CostRecord) => void;
   /** Record an outcome from outside the run (watcher timeout/fatal) and invalidate the in-flight run. */
   recordAbandoned(entry: CostRecord): void;
+  /** Invalidate the in-flight run without writing, so a caller can await before `recordAbandoned` without a late duplicate. */
+  invalidate(workItemId: number): void;
 }
 
 export function createRunCostLedger(ledger: CostLedger): RunCostLedger {
@@ -99,6 +101,9 @@ export function createRunCostLedger(ledger: CostLedger): RunCostLedger {
         written = true;
         ledger.record(entry);
       };
+    },
+    invalidate(workItemId) {
+      bump(workItemId);
     },
     recordAbandoned(entry) {
       bump(entry.workItemId);

@@ -246,6 +246,27 @@ describe('runPollCycle — cost ledger', () => {
     });
   });
 
+  test('a late record during the abandoned lookup is dropped, and a failed lookup gives unknown', async () => {
+    let lateRecord: ((entry: CostRecord) => void) | undefined;
+    const deps = makeDeps({
+      fetchItems: mock(() => Promise.resolve([mockWorkItem({ id: 1 })])),
+      processItem: mock((cfg) => {
+        lateRecord = deps.costLedger(cfg).beginRun(1);
+        return new Promise<ItemProcessResult>(() => undefined);
+      }),
+      getWorkItemUpdates: mock(async () => {
+        // The zombie job finishes while the lookup is in flight.
+        lateRecord!({ at: new Date().toISOString(), workItemId: 1, outcome: 'failed', costUsd: 1 });
+        throw new Error('ado down');
+      }),
+    });
+
+    await runPollCycle(config({ jobTimeoutMinutes: 1 / 60 }), store, deps);
+
+    expect(ledgerLines).toHaveLength(1);
+    expect(ledgerLines[0]!.triggeredBy).toBe('unknown');
+  });
+
   test('the abandoned failure line carries who triggered the item', async () => {
     const deps = makeDeps({
       fetchItems: mock(() => Promise.resolve([mockWorkItem({ id: 1 })])),

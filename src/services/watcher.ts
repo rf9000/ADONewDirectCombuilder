@@ -137,6 +137,9 @@ export async function runPollCycle(
       // a ledger line. recordAbandoned also invalidates the still-running job
       // so its eventual outcome is not recorded a second time.
       if (!config.dryRun) {
+        // Invalidate first: the lookup awaits, and the still-running job must not
+        // record its own line in the meantime.
+        deps.costLedger(config).invalidate(item.id);
         const triggeredBy = await lookupTriggeredBy(
           () => deps.getWorkItemUpdates(config, item.id),
           [config.triggerTag],
