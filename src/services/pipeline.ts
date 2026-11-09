@@ -17,6 +17,7 @@ import type {
   WorkItemResponse,
 } from '../types/index.ts';
 import type { StateStore } from '../state/state-store.ts';
+import type { ToolUsageCollector } from './tool-usage-collector.ts';
 import { costLedgerFor, costRecordFor, lifetimeSpentUsd } from '../state/cost-ledger.ts';
 import { lookupTriggeredBy } from '../utils/triggered-by.ts';
 import type { CostRecord, RunCostLedger } from '../state/cost-ledger.ts';
@@ -243,7 +244,7 @@ async function runPhaseAgent(
     ? Math.min(config.agentMaxBudgetUsd, remaining, planningRemaining)
     : Math.min(config.agentMaxBudgetUsd, remaining);
   const result = await deps.runAgent(config, prompt, {
-    collector: deps.costLedger(config).collectorFor(item.id),
+    collector: ctx.collector,
     cwd: ctx.worktrees.banking,
     additionalDirectories: [ctx.worktrees.setupFiles],
     logFile,
@@ -287,6 +288,8 @@ export interface PhaseContext {
   workItemContext: string;
   /** Experiment-only model/effort/env changes; production leaves this unset. */
   agentOverrides?: AgentOverrides;
+  /** This run's tool collector, captured at `beginRun` so a stale job never counts into a retry's. */
+  collector?: ToolUsageCollector;
 }
 
 /** Returns the planner's questions, or undefined when the plan came back clean. */
@@ -873,6 +876,8 @@ export async function runJob(
   // One ledger line per run, carrying the job's cumulative spend at the time.
   // Best-effort by construction: the ledger swallows its own write errors.
   const recordRunCost = deps.costLedger(config).beginRun(item.id);
+  // Captured now: a later retry's beginRun replaces the ledger's entry for this item.
+  const collector = deps.costLedger(config).collectorFor(item.id);
   // Who tagged the item, looked up once; a failed lookup is 'unknown', never a failed run.
   const triggeredBy = await lookupTriggeredBy(
     () => deps.getWorkItemUpdates(config, item.id),
@@ -940,6 +945,7 @@ export async function runJob(
       paths: pathsFor(worktrees.banking),
       comments,
       workItemContext: prompts.buildWorkItemContext(item, comments, config),
+      collector,
     };
 
     // `readJsonArtifact`, not `existsSync`: all three are JSON artifacts, and

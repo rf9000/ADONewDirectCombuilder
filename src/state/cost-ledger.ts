@@ -124,6 +124,8 @@ export function createRunCostLedger(ledger: CostLedger): RunCostLedger {
         const runId = crypto.randomUUID();
         ledger.record({ ...entry, runId });
         ledger.recordTools?.(collector.record({ runId, workItemId, at: entry.at }));
+        // Finished: a later abandon with no run in flight must not write stale counts.
+        if (collectors.get(workItemId) === collector) collectors.delete(workItemId);
       };
     },
     invalidate(workItemId) {

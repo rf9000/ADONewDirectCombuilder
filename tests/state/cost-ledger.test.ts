@@ -339,6 +339,32 @@ describe('createRunCostLedger tool usage', () => {
     expect(tools).toHaveLength(0);
   });
 
+  test('a stale run keeps its own collector after a retry begins', () => {
+    const { tools, run } = fake();
+    run.beginRun(1);
+    const a = run.collectorFor(1)!;
+    run.invalidate(1);
+    run.recordAbandoned(line({ workItemId: 1 }));
+    const retry = run.beginRun(1);
+    const b = run.collectorFor(1)!;
+
+    expect(a).not.toBe(b);
+    a.observe(readBlock);
+    retry(line({ workItemId: 1 }));
+    expect(tools[1]!.tools).toEqual({});
+  });
+
+  test('recordAbandoned after a finished run writes no ledger runId and no tool line', () => {
+    const { lines, tools, run } = fake();
+    const record = run.beginRun(1);
+    record(line({ workItemId: 1 }));
+    run.recordAbandoned(line({ workItemId: 1, outcome: 'failed' }));
+
+    expect(lines).toHaveLength(2);
+    expect(lines[1]!.runId).toBeUndefined();
+    expect(tools).toHaveLength(1);
+  });
+
   test('recordAbandoned twice for one run writes one tool line', () => {
     const { tools, run } = fake();
     run.beginRun(1);

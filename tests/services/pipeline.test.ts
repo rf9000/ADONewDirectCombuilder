@@ -596,12 +596,21 @@ describe('runJob — happy path', () => {
 
   test('passes the run collector to the agent', async () => {
     const deps = makeDeps();
+    const ledger = deps.costLedger(config());
+    const realBegin = ledger.beginRun.bind(ledger);
+    let begun: unknown;
+    ledger.beginRun = (id: number) => {
+      const recorder = realBegin(id);
+      begun = ledger.collectorFor(id);
+      return recorder;
+    };
     await runJob(config(), mockWorkItem(), store, deps);
 
-    const options = (deps.runAgent as ReturnType<typeof mock>).mock.calls[0]![2] as {
-      collector?: { observe: unknown };
-    };
-    expect(typeof options.collector?.observe).toBe('function');
+    const calls = (deps.runAgent as ReturnType<typeof mock>).mock.calls;
+    expect(begun).toBeDefined();
+    for (const call of calls) {
+      expect((call[2] as { collector?: unknown }).collector).toBe(begun);
+    }
   });
 
   test('runs the verify phase when build/test is enabled', async () => {
