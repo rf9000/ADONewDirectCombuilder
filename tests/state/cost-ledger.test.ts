@@ -13,8 +13,10 @@ import {
   createRunCostLedger,
   lifetimeSpentUsd,
   readCostLedger,
+  type CostLedger,
   type CostRecord,
 } from '../../src/state/cost-ledger.ts';
+import type { ToolUsageRecord } from '../../src/services/tool-usage-collector.ts';
 
 let dir: string;
 
@@ -86,7 +88,7 @@ describe('createRunCostLedger', () => {
     ledger.recordAbandoned(line({ outcome: 'failed', costUsd: 2 }));
     stale(line({ outcome: 'completed', costUsd: 3 }));
 
-    expect(lines).toEqual([line({ outcome: 'failed', costUsd: 2 })]);
+    expect(lines).toEqual([{ ...line({ outcome: 'failed', costUsd: 2 }), runId: expect.any(String) }]);
   });
 
   test('a retry after an abandoned run records normally; other items are unaffected', () => {
@@ -258,5 +260,90 @@ describe('backfillRecords', () => {
     expect(records.find((r) => r.workItemId === 5)).toMatchObject({ outcome: 'paused', costUsd: 0 });
     const ats = records.map((r) => r.at);
     expect(ats).toEqual([...ats].sort());
+  });
+});
+
+describe('createRunCostLedger tool usage', () => {
+  function fake() {
+    const lines: CostRecord[] = [];
+    const tools: ToolUsageRecord[] = [];
+    const ledger: CostLedger = {
+      record: (e) => lines.push(e),
+      recordTools: (r) => tools.push(r),
+    };
+    return { lines, tools, run: createRunCostLedger(ledger) };
+  }
+  const readBlock = {
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }] },
+    parent_tool_use_id: null,
+  } as never;
+
+  test('beginRun recorder writes ledger and tool line with one runId', () => {
+    const { lines, tools, run } = fake();
+    const record = run.beginRun(1);
+    run.collectorFor(1)!.observe(readBlock);
+    record(line({ workItemId: 1 }));
+    record(line({ workItemId: 1, outcome: 'failed' }));
+
+    expect(lines).toHaveLength(1);
+    expect(tools).toHaveLength(1);
+    expect(lines[0]!.runId).toBeTruthy();
+    expect(tools[0]!.runId).toBe(lines[0]!.runId!);
+    expect(tools[0]!.at).toBe(lines[0]!.at);
+    expect(tools[0]!.tools.Read).toBe(1);
+    expect(tools[0]!.partial).toBeUndefined();
+  });
+
+  test('abandoned run: one ledger line, one partial tool line', () => {
+    const { lines, tools, run } = fake();
+    const stale = run.beginRun(1);
+    run.collectorFor(1)!.observe(readBlock);
+    run.invalidate(1);
+    run.recordAbandoned(line({ workItemId: 1, outcome: 'failed' }));
+
+    expect(lines).toHaveLength(1);
+    expect(tools).toHaveLength(1);
+    expect(lines[0]!.runId).toBeTruthy();
+    expect(tools[0]!.partial).toBe(true);
+    expect(tools[0]!.tools.Read).toBe(1);
+    expect(tools[0]!.runId).toBe(lines[0]!.runId!);
+
+    stale(line({ workItemId: 1 }));
+    expect(lines).toHaveLength(1);
+    expect(tools).toHaveLength(1);
+  });
+
+  test('retry after abandon records normally with a fresh collector', () => {
+    const { lines, tools, run } = fake();
+    run.beginRun(1);
+    run.collectorFor(1)!.observe(readBlock);
+    run.recordAbandoned(line({ workItemId: 1, outcome: 'failed' }));
+
+    const retry = run.beginRun(1);
+    retry(line({ workItemId: 1, outcome: 'paused' }));
+
+    expect(lines).toHaveLength(2);
+    expect(tools).toHaveLength(2);
+    expect(tools[1]!.tools).toEqual({});
+    expect(tools[1]!.partial).toBeUndefined();
+    expect(tools[1]!.runId).not.toBe(tools[0]!.runId);
+  });
+
+  test('recordAbandoned without a run writes a ledger line without runId and no tool line', () => {
+    const { lines, tools, run } = fake();
+    run.recordAbandoned(line({ workItemId: 1, outcome: 'failed' }));
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.runId).toBeUndefined();
+    expect(tools).toHaveLength(0);
+  });
+
+  test('recordAbandoned twice for one run writes one tool line', () => {
+    const { tools, run } = fake();
+    run.beginRun(1);
+    run.recordAbandoned(line({ workItemId: 1 }));
+    run.recordAbandoned(line({ workItemId: 1 }));
+    expect(tools).toHaveLength(1);
   });
 });

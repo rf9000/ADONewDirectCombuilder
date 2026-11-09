@@ -9,6 +9,7 @@ import type {
   ModelUsageSummary,
   RateLimitInfo,
 } from '../types/index.ts';
+import { withToolUsageHooks, type ToolUsageCollector } from './tool-usage-collector.ts';
 
 /**
  * Tools the pipeline agents are allowed to use. `Task`/`Agent` matter because the
@@ -58,6 +59,8 @@ export interface AgentRunOptions extends AgentOverrides {
   appendSystemPrompt?: string;
   /** Replaces the default tool allowlist (the experiment judge runs read-only). */
   allowedTools?: string[];
+  /** Records the tools this run used; the pipeline writes it next to the cost ledger. */
+  collector?: ToolUsageCollector;
 }
 
 function log(message: string): void {
@@ -240,6 +243,7 @@ export async function runAgent(
   let durationMs: number | undefined;
   let rateLimit: RateLimitInfo | undefined;
   let assistantError: string | undefined;
+  const hooks = withToolUsageHooks(undefined, options.collector);
 
   try {
     for await (const message of queryFn({
@@ -264,6 +268,7 @@ export async function runAgent(
         allowDangerouslySkipPermissions: true,
         maxTurns: options.maxTurns ?? config.agentMaxTurns,
         maxBudgetUsd: options.maxBudgetUsd ?? config.agentMaxBudgetUsd,
+        ...(hooks ? { hooks } : {}),
         ...(Object.keys(mcpServers).length > 0
           ? { mcpServers: mcpServers as never }
           : {}),
@@ -278,6 +283,8 @@ export async function runAgent(
           : {}),
       },
     })) {
+      options.collector?.observe(message);
+
       if (message.type === 'system' && 'session_id' in message) {
         sessionId = (message as { session_id?: string }).session_id ?? sessionId;
       }

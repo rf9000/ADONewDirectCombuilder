@@ -243,6 +243,7 @@ async function runPhaseAgent(
     ? Math.min(config.agentMaxBudgetUsd, remaining, planningRemaining)
     : Math.min(config.agentMaxBudgetUsd, remaining);
   const result = await deps.runAgent(config, prompt, {
+    collector: deps.costLedger(config).collectorFor(item.id),
     cwd: ctx.worktrees.banking,
     additionalDirectories: [ctx.worktrees.setupFiles],
     logFile,

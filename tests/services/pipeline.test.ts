@@ -594,6 +594,16 @@ describe('runJob — happy path', () => {
     expect(options.additionalDirectories[0]).toContain('setupFiles');
   });
 
+  test('passes the run collector to the agent', async () => {
+    const deps = makeDeps();
+    await runJob(config(), mockWorkItem(), store, deps);
+
+    const options = (deps.runAgent as ReturnType<typeof mock>).mock.calls[0]![2] as {
+      collector?: { observe: unknown };
+    };
+    expect(typeof options.collector?.observe).toBe('function');
+  });
+
   test('runs the verify phase when build/test is enabled', async () => {
     const deps = makeDeps();
     await runJob(config({ skipBuildTest: false }), mockWorkItem(), store, deps);

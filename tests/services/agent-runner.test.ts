@@ -338,6 +338,30 @@ describe('runAgent with an injected query', () => {
     expect(options.mcpServers).toBeUndefined();
   });
 
+  test('observes messages and adds the tool-usage hook when given a collector', async () => {
+    const seen: { params?: any } = {};
+    const observed: unknown[] = [];
+    const collector = {
+      observe: (m: unknown) => observed.push(m),
+      hooks: () => ({ InstructionsLoaded: [{ hooks: [] }] }),
+      record: () => ({}) as never,
+    };
+    await runAgent(
+      mockConfig(),
+      'hi',
+      { cwd: dir, logFile: join(dir, 'run.log'), collector: collector as never },
+      fakeQuery([{ type: 'system', subtype: 'init' }, result(1)], seen),
+    );
+    expect(observed).toHaveLength(2);
+    expect(seen.params.options.hooks.InstructionsLoaded).toHaveLength(1);
+  });
+
+  test('sets no hooks without a collector', async () => {
+    const seen: { params?: any } = {};
+    await runAgent(mockConfig(), 'hi', { cwd: dir, logFile: join(dir, 'run.log') }, fakeQuery([result(1)], seen));
+    expect(seen.params.options.hooks).toBeUndefined();
+  });
+
   test('leaves model, effort and env at production defaults without overrides', async () => {
     const seen: { params?: any } = {};
     const config = mockConfig();

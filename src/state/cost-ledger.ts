@@ -2,6 +2,12 @@ import { appendFileSync, mkdirSync, readFileSync } from 'fs';
 import { dirname } from 'path';
 import type { AppConfig, JobPhase, WorkItemResponse } from '../types/index.ts';
 import type { StateStore } from './state-store.ts';
+import {
+  appendToolUsage,
+  createToolUsageCollector,
+  type ToolUsageCollector,
+  type ToolUsageRecord,
+} from '../services/tool-usage-collector.ts';
 
 /**
  * One line of the ledger. Serialised as JSON, one record per line (JSONL).
@@ -26,10 +32,14 @@ export interface CostRecord {
   prId?: number;
   /** Lowercased email of who added the trigger tag, or 'automatic' / 'unknown'. Absent on older lines. */
   triggeredBy?: string;
+  /** Joins this line to its line in tool-usage.jsonl. Absent on older lines and on abandoned lines with no run in flight. */
+  runId?: string;
 }
 
 export interface CostLedger {
   record(entry: CostRecord): void;
+  /** Append the run's tool-usage line next to the ledger. Best effort, like `record`. */
+  recordTools?(record: ToolUsageRecord): void;
 }
 
 /**
@@ -60,6 +70,9 @@ export function createCostLedger(deps: {
         }
       }
     },
+    recordTools(record: ToolUsageRecord): void {
+      appendToolUsage(deps.path, record, warn);
+    },
   };
 }
 
@@ -82,6 +95,8 @@ export interface RunCostLedger {
   recordAbandoned(entry: CostRecord): void;
   /** Invalidate the in-flight run without writing, so a caller can await before `recordAbandoned` without a late duplicate. */
   invalidate(workItemId: number): void;
+  /** The tool-usage collector of the work item's current run, created by `beginRun`; undefined before any run. */
+  collectorFor(workItemId: number): ToolUsageCollector | undefined;
 }
 
 export function createRunCostLedger(ledger: CostLedger): RunCostLedger {
@@ -92,22 +107,45 @@ export function createRunCostLedger(ledger: CostLedger): RunCostLedger {
     return next;
   };
 
+  // The collector of each work item's latest run. `invalidate` leaves it in
+  // place so the `recordAbandoned` that follows can still read what the run
+  // used; the next `beginRun` replaces it, and `recordAbandoned` consumes it.
+  const collectors = new Map<number, ToolUsageCollector>();
+
   return {
     beginRun(workItemId) {
       const gen = bump(workItemId);
+      const collector = createToolUsageCollector();
+      collectors.set(workItemId, collector);
       let written = false;
       return (entry) => {
         if (written || generations.get(workItemId) !== gen) return;
         written = true;
-        ledger.record(entry);
+        const runId = crypto.randomUUID();
+        ledger.record({ ...entry, runId });
+        ledger.recordTools?.(collector.record({ runId, workItemId, at: entry.at }));
       };
     },
     invalidate(workItemId) {
       bump(workItemId);
     },
+    collectorFor(workItemId) {
+      return collectors.get(workItemId);
+    },
     recordAbandoned(entry) {
+      // Taken before the bump, and removed so a second abandon cannot write a second tool line.
+      const collector = collectors.get(entry.workItemId);
+      collectors.delete(entry.workItemId);
       bump(entry.workItemId);
-      ledger.record(entry);
+      if (!collector) {
+        ledger.record(entry);
+        return;
+      }
+      const runId = crypto.randomUUID();
+      ledger.record({ ...entry, runId });
+      ledger.recordTools?.(
+        collector.record({ runId, workItemId: entry.workItemId, at: entry.at, partial: true }),
+      );
     },
   };
 }
