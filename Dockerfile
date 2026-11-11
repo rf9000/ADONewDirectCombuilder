@@ -38,22 +38,27 @@ RUN apt-get update \
 
 # The Linux build of the Continia CLI. The continia-* skills document it as
 # `.tools/continia.exe`; on PATH as `continia` it works the same headless.
-COPY .tools/continia-linux /usr/local/bin/continia
-RUN chmod +x /usr/local/bin/continia
+# --chmod on the COPY: a separate `RUN chmod` stores the 82 MB binary a second time.
+COPY --chmod=755 .tools/continia-linux /usr/local/bin/continia
 
 WORKDIR /app
 
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
-
-# .claude/ ships in the image: the skills here are symlinked into each worktree.
-COPY . .
-
 # /data is the mounted volume: repo cache, worktrees, state, logs, alc cache.
+# /app is handed to bun while still empty: a `chown -R /app` after the install
+# rewrites every file into a new layer and stores node_modules twice.
 RUN mkdir -p /data/repos /data/worktrees /data/state /data/logs \
-    && chown -R bun:bun /data /app
+    && chown -R bun:bun /data \
+    && chown bun:bun /app
 
 USER bun
+
+# Installed as bun, so the files are born with the right owner. Bun's download
+# cache goes in the same RUN, or the layer keeps it.
+COPY --chown=bun:bun package.json bun.lock ./
+RUN bun install --frozen-lockfile && bun pm cache rm
+
+# .claude/ ships in the image: the skills here are symlinked into each worktree.
+COPY --chown=bun:bun . .
 
 # CONTINIA_AUTO_INSTALL_ALC is deliberately 0. continia-linux 0.22.0 looks for the
 # downloaded compiler at lib/net10.0/alc while the package ships lib/net8.0/alc, so
