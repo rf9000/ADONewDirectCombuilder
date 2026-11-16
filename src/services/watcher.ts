@@ -10,9 +10,9 @@ import * as sdk from '../sdk/azure-devops-client.ts';
 import * as proc from './processor.ts';
 import { lookupTriggeredBy } from '../utils/triggered-by.ts';
 import { DemoPortalAuth, type DemoPortalSession } from './demoportal-auth.ts';
-import { runProcess } from './process-runner.ts';
+import { runProcess, type RunProcess } from './process-runner.ts';
 import { buildChildEnv } from './agent-runner.ts';
-import { createControlHandler, startControlServer } from '../server/control.ts';
+import { createControlHandler, withControlServer } from '../server/control.ts';
 
 /** Set to true to cut the watcher's sleep short (a sign-in finished). */
 export interface WakeFlag {
@@ -121,7 +121,7 @@ export async function runPollCycle(
   if (actionable.length === 0) {
     // Nothing to start: only keep the dashboard's sign-in card right. Never fails the cycle.
     await deps.demoPortal?.peek().catch((err) => log(`DemoPortal sign-in check failed :: ${err instanceof Error ? err.message : String(err)}`));
-  } else if (deps.demoPortal && !(await deps.demoPortal.ensure())) {
+  } else if (deps.demoPortal && !(await signedIn(deps.demoPortal))) {
     log(`DemoPortal sign-in needed; ${actionable.length} work item(s) wait. Sign in from the dashboard or run continia auth login`);
     return { processed, errors, skipped };
   }
@@ -182,6 +182,37 @@ export async function runPollCycle(
   return { processed, errors, skipped };
 }
 
+/**
+ * `ensure()` throwing (the CLI could not even start) must not hold work back:
+ * the job reports its own sign-in error, as when the check fails inside ensure.
+ */
+async function signedIn(demoPortal: DemoPortalSession): Promise<boolean> {
+  try {
+    return await demoPortal.ensure();
+  } catch (err) {
+    log(`DemoPortal sign-in check failed - ${err instanceof Error ? err.message : String(err)}`);
+    return true;
+  }
+}
+
+/**
+ * The DemoPortal sign-in service and the flag it uses to wake the watcher, or
+ * undefined when there is nothing to sign in to: an API token, or
+ * SKIP_BUILD_TEST (no job uses the Continia CLI, so the sign-in must not hold work).
+ */
+export function createDemoPortal(
+  config: AppConfig,
+  run: RunProcess = (cmd, cwd, _env, t, onLine) => runProcess(cmd, cwd, buildChildEnv({}, config.continiaAuthMethod), t, onLine),
+): { demoPortal: DemoPortalAuth; wake: WakeFlag } | undefined {
+  if (config.continiaAuthMethod !== 'azure-ad' || config.skipBuildTest) return undefined;
+  const wake: WakeFlag = { requested: false };
+  const demoPortal = new DemoPortalAuth(config.continiaCliPath, process.cwd(), run, log);
+  demoPortal.onSignedIn = () => {
+    wake.requested = true;
+  };
+  return { demoPortal, wake };
+}
+
 export function sleep(ms: number, signal: { aborted: boolean }, wake?: WakeFlag): Promise<void> {
   return new Promise((resolve) => {
     const checkInterval = 1000;
@@ -202,27 +233,9 @@ export async function startWatcher(config: AppConfig): Promise<void> {
   const stateStore = new StateStore(config.stateDir);
   const signal = { aborted: false };
 
-  // DemoPortal's Azure AD session exists only in azure-ad mode; an API token has nothing to sign in to.
-  const deps: WatcherDeps = { ...defaultDeps };
-  if (config.continiaAuthMethod === 'azure-ad') {
-    const wake: WakeFlag = { requested: false };
-    const demoPortal = new DemoPortalAuth(
-      config.continiaCliPath,
-      process.cwd(),
-      (cmd, cwd, _env, t, onLine) => runProcess(cmd, cwd, buildChildEnv({}, config.continiaAuthMethod), t, onLine),
-      log,
-    );
-    demoPortal.onSignedIn = () => {
-      wake.requested = true;
-    };
-    deps.demoPortal = demoPortal;
-    deps.wake = wake;
-    void demoPortal.peek().catch((err) => log(`DemoPortal sign-in check failed :: ${err instanceof Error ? err.message : String(err)}`));
-  }
-  if (config.controlPort !== undefined) {
-    startControlServer(config.controlPort, createControlHandler({ ...(deps.demoPortal ? { demoPortal: deps.demoPortal } : {}) }));
-    log(`control API on port ${config.controlPort}`);
-  }
+  // DemoPortal's Azure AD session: only in azure-ad mode with the build gate on (see createDemoPortal).
+  const deps: WatcherDeps = { ...defaultDeps, ...createDemoPortal(config) };
+  void deps.demoPortal?.peek().catch((err) => log(`DemoPortal sign-in check failed :: ${err instanceof Error ? err.message : String(err)}`));
 
   const shutdown = () => {
     // The in-flight job keeps running to a phase boundary so its JobRecord stays
@@ -237,21 +250,29 @@ export async function startWatcher(config: AppConfig): Promise<void> {
   log(`Trigger tag: '${config.triggerTag}' | waiting tag: '${config.waitingTag}'`);
   log(`Tracking ${stateStore.jobCount} job(s): ${JSON.stringify(stateStore.countByPhase())}`);
 
-  while (!signal.aborted) {
-    try {
-      const result = await runPollCycle(config, stateStore, deps, signal);
-      log(
-        `Cycle complete: ${result.processed} processed, ${result.errors} errors, ${result.skipped} skipped`,
-      );
-    } catch (err) {
-      log(`Cycle failed: ${err}`);
-    }
+  // The control server stops once the loop ends, so SIGTERM lets the process exit.
+  await withControlServer(
+    config.controlPort,
+    createControlHandler({ ...(deps.demoPortal ? { demoPortal: deps.demoPortal } : {}) }),
+    async () => {
+      while (!signal.aborted) {
+        try {
+          const result = await runPollCycle(config, stateStore, deps, signal);
+          log(
+            `Cycle complete: ${result.processed} processed, ${result.errors} errors, ${result.skipped} skipped`,
+          );
+        } catch (err) {
+          log(`Cycle failed: ${err}`);
+        }
 
-    if (!signal.aborted) {
-      log(`Sleeping ${config.pollIntervalMinutes} minute(s)...`);
-      await sleep(config.pollIntervalMinutes * 60 * 1000, signal, deps.wake);
-    }
-  }
+        if (!signal.aborted) {
+          log(`Sleeping ${config.pollIntervalMinutes} minute(s)...`);
+          await sleep(config.pollIntervalMinutes * 60 * 1000, signal, deps.wake);
+        }
+      }
+    },
+    (port) => log(`control API on port ${port}`),
+  );
 
   log('Watcher stopped');
 }

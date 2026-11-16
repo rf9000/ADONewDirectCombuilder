@@ -85,9 +85,11 @@ docker-compose.
   session and drops the token in azure-ad mode. `docker-entrypoint.sh` links `~/.continia` to
   `/data/continia` so the `continia auth login` session survives rebuilds. In azure-ad mode the
   watcher holds all work (logging `DemoPortal sign-in needed; <n> work item(s) wait`) until the
-  session is valid. `CONTROL_PORT` (unset or blank = off) starts an unauthenticated control API
+  session is valid; `createDemoPortal` skips the check with `SKIP_BUILD_TEST`, and an `ensure()`
+  that throws is logged (`DemoPortal sign-in check failed - <message>`) and counts as signed in.
+  `CONTROL_PORT` (unset or blank = off) starts an unauthenticated control API
   (`GET /status`, `POST /signin`, `src/server/control.ts`) for the dashboard's sign-in button;
-  compose network only, never a `ports:` mapping
+  compose network only, never a `ports:` mapping. `withControlServer` stops it when the loop ends
 - **Serialized jobs** — one at a time; BC cannot run concurrent test jobs on one environment
 - **Tag-swap handshake** — the bot swaps the trigger tag for a waiting tag when it needs answers;
   re-adding the trigger tag resumes the job. Blocking questions pause up to `MAX_CLARIFY_ROUNDS`;

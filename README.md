@@ -158,7 +158,10 @@ To sign in from the monitor dashboard instead, set `CONTROL_PORT` (for example `
 and `POST /signin`. It has no authentication, so reach it over the compose network only and never
 add a `ports:` mapping for it. While azure-ad sign-in is needed, the watcher logs
 `DemoPortal sign-in needed; <n> work item(s) wait` and starts no job; it resumes as soon as the
-sign-in finishes. Unset or blank `CONTROL_PORT` starts no server.
+sign-in finishes. If the check itself throws, the watcher logs `DemoPortal sign-in check failed -
+<message>` and runs the job anyway. With `SKIP_BUILD_TEST=true` no job uses the CLI, so there is no
+sign-in check at all. Unset or blank `CONTROL_PORT` starts no server; the server stops when the
+watcher loop ends.
 
 That third check matters more than it looks: the verify phase is the only thing that compiles AL,
 so a compiler that can't start fails every job after a full plan and implement have already run.

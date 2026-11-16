@@ -36,6 +36,28 @@ export function createControlHandler(deps: ControlDeps): (req: Request) => Promi
   };
 }
 
+/**
+ * Serves the control API while `body` runs (the watcher loop), then stops it:
+ * a live server would keep the process from exiting after SIGTERM. Without a
+ * port it only runs `body`.
+ */
+export async function withControlServer<T>(
+  port: number | undefined,
+  handler: (req: Request) => Promise<Response>,
+  body: () => Promise<T>,
+  onListening?: (port: number) => void,
+  hostname?: string,
+): Promise<T> {
+  if (port === undefined) return body();
+  const server = startControlServer(port, handler, hostname);
+  onListening?.(server.port);
+  try {
+    return await body();
+  } finally {
+    server.stop();
+  }
+}
+
 /** Port 0 picks a free port (tests). `hostname` defaults to every interface (the compose network). */
 export function startControlServer(
   port: number,

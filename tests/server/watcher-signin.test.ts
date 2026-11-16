@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mockConfig, mockWorkItem } from '../helpers.ts';
-import { runPollCycle, sleep } from '../../src/services/watcher.ts';
+import { createDemoPortal, runPollCycle, sleep } from '../../src/services/watcher.ts';
 import type { WatcherDeps } from '../../src/services/watcher.ts';
 import { StateStore } from '../../src/state/state-store.ts';
 import { createRunCostLedger } from '../../src/state/cost-ledger.ts';
@@ -108,6 +108,16 @@ describe('runPollCycle sign-in', () => {
     expect(processItem).toHaveBeenCalledTimes(1);
   });
 
+  test('a throwing ensure is logged and treated as signed in: work runs', async () => {
+    const ensure = async (): Promise<boolean> => {
+      throw new Error('spawn continia ENOENT');
+    };
+    const { deps, processItem, store, config } = setup(1, session(true, async () => {}, ensure));
+    await runPollCycle(config, store, deps);
+    expect(processItem).toHaveBeenCalledTimes(1);
+    expect(lines.some((l) => l.endsWith('DemoPortal sign-in check failed - spawn continia ENOENT'))).toBe(true);
+  });
+
   test('peeks when no items are fetched, and survives a throwing peek', async () => {
     const peek = mock(async () => {
       throw new Error('boom');
@@ -129,5 +139,25 @@ describe('sleep', () => {
     await sleep(60_000, { aborted: false }, wake);
     expect(Date.now() - t0).toBeLessThan(2500);
     expect(wake.requested).toBe(false);
+  });
+});
+
+describe('createDemoPortal', () => {
+  test('SKIP_BUILD_TEST: no sign-in service, and work runs', async () => {
+    const { deps, processItem, store, config } = setup(1);
+    const cfg = { ...config, continiaAuthMethod: 'azure-ad' as const, skipBuildTest: true };
+    expect(createDemoPortal(cfg)).toBeUndefined();
+    await runPollCycle(cfg, store, { ...deps, ...createDemoPortal(cfg) });
+    expect(processItem).toHaveBeenCalledTimes(1);
+  });
+
+  test('api-token: no sign-in service', () => {
+    expect(createDemoPortal(mockConfig({ continiaAuthMethod: 'api-token', skipBuildTest: false }))).toBeUndefined();
+  });
+
+  test('azure-ad with the build gate: a sign-in service and a wake flag', () => {
+    const made = createDemoPortal(mockConfig({ continiaAuthMethod: 'azure-ad', skipBuildTest: false }));
+    expect(made?.demoPortal).toBeDefined();
+    expect(made?.wake).toEqual({ requested: false });
   });
 });
