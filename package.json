@@ -9,7 +9,7 @@
     "status": "bun run src/cli/index.ts status",
     "experiment": "bun run src/cli/index.ts experiment",
     "test": "bun test --preload ./tests/setup.ts tests/**/*.test.ts",
-    "test:unit": "bun test --preload ./tests/setup.ts ./tests/config/ ./tests/sdk/ ./tests/state/ ./tests/services/",
+    "test:unit": "bun test --preload ./tests/setup.ts ./tests/config/ ./tests/sdk/ ./tests/state/ ./tests/services/ ./tests/server/",
     "test:integration": "bun test --preload ./tests/setup.ts tests/integration/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

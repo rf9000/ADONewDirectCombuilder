@@ -9,6 +9,15 @@ import type { RunCostLedger } from '../state/cost-ledger.ts';
 import * as sdk from '../sdk/azure-devops-client.ts';
 import * as proc from './processor.ts';
 import { lookupTriggeredBy } from '../utils/triggered-by.ts';
+import { DemoPortalAuth, type DemoPortalSession } from './demoportal-auth.ts';
+import { runProcess } from './process-runner.ts';
+import { buildChildEnv } from './agent-runner.ts';
+import { createControlHandler, startControlServer } from '../server/control.ts';
+
+/** Set to true to cut the watcher's sleep short (a sign-in finished). */
+export interface WakeFlag {
+  requested: boolean;
+}
 
 export interface WatcherDeps {
   fetchItems: (config: AppConfig) => Promise<WorkItemResponse[]>;
@@ -27,6 +36,11 @@ export interface WatcherDeps {
 
   /** Revision history, to find who tagged an abandoned item. */
   getWorkItemUpdates: typeof sdk.getWorkItemUpdates;
+
+  /** DemoPortal's Azure AD session; absent with an API token. Work is held while it needs a sign-in. */
+  demoPortal?: DemoPortalSession;
+  /** Wakes the sleeping watcher, e.g. when a sign-in finishes. */
+  wake?: WakeFlag;
 }
 
 async function defaultFetchItems(config: AppConfig): Promise<WorkItemResponse[]> {
@@ -98,10 +112,20 @@ export async function runPollCycle(
   log(`Polling for items tagged '${config.triggerTag}'...`);
 
   const items = await deps.fetchItems(config);
+
+  if (items.length === 0) {
+    // Keeps the dashboard's sign-in card right while idle; never fails the cycle.
+    await deps.demoPortal?.peek().catch((err) => log(`DemoPortal sign-in check failed :: ${err instanceof Error ? err.message : String(err)}`));
+  }
   const actionable = items.filter((item) => stateStore.shouldProcess(item.id));
   skipped = items.length - actionable.length;
 
   log(`  Found ${items.length} tagged item(s), ${actionable.length} actionable`);
+
+  if (items.length > 0 && deps.demoPortal && !(await deps.demoPortal.ensure())) {
+    log(`DemoPortal sign-in needed; ${items.length} work item(s) wait. Sign in from the dashboard or run continia auth login`);
+    return { processed, errors, skipped };
+  }
 
   for (const item of actionable) {
     if (signal.aborted) {
@@ -159,13 +183,15 @@ export async function runPollCycle(
   return { processed, errors, skipped };
 }
 
-function sleep(ms: number, signal: { aborted: boolean }): Promise<void> {
+export function sleep(ms: number, signal: { aborted: boolean }, wake?: WakeFlag): Promise<void> {
   return new Promise((resolve) => {
     const checkInterval = 1000;
     let elapsed = 0;
     const timer = setInterval(() => {
       elapsed += checkInterval;
-      if (signal.aborted || elapsed >= ms) {
+      const woken = wake?.requested === true;
+      if (woken && wake) wake.requested = false;
+      if (signal.aborted || woken || elapsed >= ms) {
         clearInterval(timer);
         resolve();
       }
@@ -176,6 +202,28 @@ function sleep(ms: number, signal: { aborted: boolean }): Promise<void> {
 export async function startWatcher(config: AppConfig): Promise<void> {
   const stateStore = new StateStore(config.stateDir);
   const signal = { aborted: false };
+
+  // DemoPortal's Azure AD session exists only in azure-ad mode; an API token has nothing to sign in to.
+  const deps: WatcherDeps = { ...defaultDeps };
+  if (config.continiaAuthMethod === 'azure-ad') {
+    const wake: WakeFlag = { requested: false };
+    const demoPortal = new DemoPortalAuth(
+      config.continiaCliPath,
+      process.cwd(),
+      (cmd, cwd, _env, t, onLine) => runProcess(cmd, cwd, buildChildEnv({}, config.continiaAuthMethod), t, onLine),
+      log,
+    );
+    demoPortal.onSignedIn = () => {
+      wake.requested = true;
+    };
+    deps.demoPortal = demoPortal;
+    deps.wake = wake;
+    void demoPortal.peek().catch((err) => log(`DemoPortal sign-in check failed :: ${err instanceof Error ? err.message : String(err)}`));
+  }
+  if (config.controlPort !== undefined) {
+    startControlServer(config.controlPort, createControlHandler({ ...(deps.demoPortal ? { demoPortal: deps.demoPortal } : {}) }));
+    log(`control API on port ${config.controlPort}`);
+  }
 
   const shutdown = () => {
     // The in-flight job keeps running to a phase boundary so its JobRecord stays
@@ -192,7 +240,7 @@ export async function startWatcher(config: AppConfig): Promise<void> {
 
   while (!signal.aborted) {
     try {
-      const result = await runPollCycle(config, stateStore, defaultDeps, signal);
+      const result = await runPollCycle(config, stateStore, deps, signal);
       log(
         `Cycle complete: ${result.processed} processed, ${result.errors} errors, ${result.skipped} skipped`,
       );
@@ -202,7 +250,7 @@ export async function startWatcher(config: AppConfig): Promise<void> {
 
     if (!signal.aborted) {
       log(`Sleeping ${config.pollIntervalMinutes} minute(s)...`);
-      await sleep(config.pollIntervalMinutes * 60 * 1000, signal);
+      await sleep(config.pollIntervalMinutes * 60 * 1000, signal, deps.wake);
     }
   }
 

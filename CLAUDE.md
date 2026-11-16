@@ -83,7 +83,11 @@ docker-compose.
 - **Continia CLI auth** — `CONTINIA_AUTH_METHOD` (`api-token` | `azure-ad`; unset = api-token
   when `CONTINIA_API_TOKEN` is set, else azure-ad). `buildChildEnv` sets it in every agent
   session and drops the token in azure-ad mode. `docker-entrypoint.sh` links `~/.continia` to
-  `/data/continia` so the `continia auth login` session survives rebuilds
+  `/data/continia` so the `continia auth login` session survives rebuilds. In azure-ad mode the
+  watcher holds all work (logging `DemoPortal sign-in needed; <n> work item(s) wait`) until the
+  session is valid. `CONTROL_PORT` (unset or blank = off) starts an unauthenticated control API
+  (`GET /status`, `POST /signin`, `src/server/control.ts`) for the dashboard's sign-in button;
+  compose network only, never a `ports:` mapping
 - **Serialized jobs** — one at a time; BC cannot run concurrent test jobs on one environment
 - **Tag-swap handshake** — the bot swaps the trigger tag for a waiting tag when it needs answers;
   re-adding the trigger tag resumes the job. Blocking questions pause up to `MAX_CLARIFY_ROUNDS`;

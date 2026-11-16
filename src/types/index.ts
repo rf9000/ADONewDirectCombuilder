@@ -79,6 +79,8 @@ export interface AppConfig {
   continiaCliPath: string;
   /** CONTINIA_AUTH_METHOD, resolved: api-token when a token is set, else azure-ad. */
   continiaAuthMethod: ContiniaAuthMethod;
+  /** CONTROL_PORT: port of the internal control API (dashboard sign-in). Unset: no server. */
+  controlPort?: number;
 
   // --- Behaviour ---
   draftPr: boolean;

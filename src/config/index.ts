@@ -106,6 +106,11 @@ const envSchema = z.object({
   // smoke test should not need a DemoPortal token.
   CONTINIA_API_TOKEN: z.string().default(""),
   CONTINIA_CLI_PATH: z.string().default("/usr/local/bin/continia"),
+  // Port of the internal control API (dashboard sign-in). Unset or blank: no server.
+  CONTROL_PORT: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.coerce.number().int().min(1).max(65535).optional(),
+  ),
 
   // --- Behaviour ---
   DRAFT_PR: boolFlag(true),
@@ -220,6 +225,7 @@ export function loadConfig(
 
     continiaCliPath: parsed.CONTINIA_CLI_PATH,
     continiaAuthMethod,
+    controlPort: parsed.CONTROL_PORT,
 
     draftPr: parsed.DRAFT_PR,
     skipBuildTest: parsed.SKIP_BUILD_TEST,

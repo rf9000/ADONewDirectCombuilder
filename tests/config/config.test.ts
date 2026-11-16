@@ -287,3 +287,18 @@ describe("loadConfig", () => {
     expect(config.orgUrl).toBe("https://dev.azure.com/contoso");
   });
 });
+
+describe("CONTROL_PORT", () => {
+  it("is undefined when unset or blank", () => {
+    expect(loadConfig(validEnv).controlPort).toBeUndefined();
+    expect(loadConfig({ ...validEnv, CONTROL_PORT: "" }).controlPort).toBeUndefined();
+  });
+
+  it("parses a port number", () => {
+    expect(loadConfig({ ...validEnv, CONTROL_PORT: "8787" }).controlPort).toBe(8787);
+  });
+
+  it("rejects an out-of-range port", () => {
+    expect(() => loadConfig({ ...validEnv, CONTROL_PORT: "70000" })).toThrow(/CONTROL_PORT/);
+  });
+});
