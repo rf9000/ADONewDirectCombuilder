@@ -44,10 +44,14 @@ function setup(count: number, demoPortal?: DemoPortalSession) {
   return { deps, processItem, store: new StateStore(dir), config: mockConfig({ stateDir: dir }) };
 }
 
-const session = (ensure: boolean, peek: () => Promise<void> = async () => {}): DemoPortalSession => ({
+const session = (
+  ensure: boolean,
+  peek: () => Promise<void> = async () => {},
+  ensureFn: () => Promise<boolean> = async () => ensure,
+): DemoPortalSession => ({
   status: () => ({ needed: !ensure, reason: null, checkedAt: null, login: null }),
   peek,
-  ensure: async () => ensure,
+  ensure: ensureFn,
   startLogin: async () => {
     throw new Error('unused');
   },
@@ -62,6 +66,34 @@ describe('runPollCycle sign-in', () => {
       'DemoPortal sign-in needed; 1 work item(s) wait. Sign in from the dashboard or run continia auth login',
     ))).toBe(true);
     expect(result.processed).toBe(0);
+  });
+
+  test('counts only actionable items in the hold line', async () => {
+    const { deps, processItem, store, config } = setup(3, session(false));
+    store.update(1, { phase: 'done' });
+    await runPollCycle(config, store, deps);
+    expect(processItem).not.toHaveBeenCalled();
+    expect(lines.some((l) => l.includes('; 2 work item(s) wait.'))).toBe(true);
+  });
+
+  test('does not check sign-in when every fetched item is already done', async () => {
+    const ensure = mock(async () => false);
+    const peek = mock(async () => {});
+    const { deps, processItem, store, config } = setup(2, session(false, peek, ensure));
+    store.update(1, { phase: 'done' });
+    store.update(2, { phase: 'done' });
+    await runPollCycle(config, store, deps);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(peek).toHaveBeenCalledTimes(1);
+    expect(processItem).not.toHaveBeenCalled();
+    expect(lines.some((l) => l.includes('DemoPortal sign-in needed'))).toBe(false);
+  });
+
+  test('does not check sign-in when no items are fetched', async () => {
+    const ensure = mock(async () => false);
+    const { deps, store, config } = setup(0, session(false, async () => {}, ensure));
+    await runPollCycle(config, store, deps);
+    expect(ensure).not.toHaveBeenCalled();
   });
 
   test('runs work when signed in', async () => {

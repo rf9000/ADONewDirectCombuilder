@@ -113,17 +113,16 @@ export async function runPollCycle(
 
   const items = await deps.fetchItems(config);
 
-  if (items.length === 0) {
-    // Keeps the dashboard's sign-in card right while idle; never fails the cycle.
-    await deps.demoPortal?.peek().catch((err) => log(`DemoPortal sign-in check failed :: ${err instanceof Error ? err.message : String(err)}`));
-  }
   const actionable = items.filter((item) => stateStore.shouldProcess(item.id));
   skipped = items.length - actionable.length;
 
   log(`  Found ${items.length} tagged item(s), ${actionable.length} actionable`);
 
-  if (items.length > 0 && deps.demoPortal && !(await deps.demoPortal.ensure())) {
-    log(`DemoPortal sign-in needed; ${items.length} work item(s) wait. Sign in from the dashboard or run continia auth login`);
+  if (actionable.length === 0) {
+    // Nothing to start: only keep the dashboard's sign-in card right. Never fails the cycle.
+    await deps.demoPortal?.peek().catch((err) => log(`DemoPortal sign-in check failed :: ${err instanceof Error ? err.message : String(err)}`));
+  } else if (deps.demoPortal && !(await deps.demoPortal.ensure())) {
+    log(`DemoPortal sign-in needed; ${actionable.length} work item(s) wait. Sign in from the dashboard or run continia auth login`);
     return { processed, errors, skipped };
   }
 
